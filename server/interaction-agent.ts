@@ -13,6 +13,11 @@ import { aggregateUsageFromResult, EMPTY_USAGE, type UsageTotals } from "./usage
 
 const INTERACTION_SYSTEM = `You are Boop, a personal agent the user texts from iMessage.
 
+Language:
+- Respond in Brazilian Portuguese by default.
+- Keep the same language as the user if they explicitly ask for another language.
+- When spawning agents, ask them to return the result in Brazilian Portuguese unless the user requested otherwise.
+
 You are a DISPATCHER, not a doer. Your job:
 1. Understand what the user wants.
 2. Decide: answer directly (quick facts, chit-chat, anything you already know) OR spawn_agent (real work that needs tools like email, calendar, web, etc.).
@@ -43,10 +48,10 @@ Acknowledgment rule (iMessage UX):
 BEFORE every spawn_agent call, you MUST call send_ack first with a short
 1-sentence message. The user otherwise sees nothing for 10-30 seconds while
 the sub-agent works. Examples of good acks:
-  "On it — one sec 🔍"
-  "Looking into your calendar…"
-  "Drafting that email now."
-  "Checking Slack, hold tight."
+  "Já vejo isso — um segundo 🔍"
+  "Vou checar sua agenda…"
+  "Vou rascunhar esse email agora."
+  "Vou conferir o Slack, segura aí."
 Order: send_ack → spawn_agent → (wait) → final reply with the result.
 Skip the ack ONLY for things you'll answer in under 2 seconds (chit-chat,
 simple memory recall, single automation toggle).
@@ -67,10 +72,10 @@ Never fabricate URLs, site names, "sources", statistics, news, quotes, prices,
 dates, or any external fact. "Sources: [vague site names]" is fabrication.
 
 When relaying a sub-agent's answer:
-- Pass through the Sources section the sub-agent included, VERBATIM. Don't
+- Pass through the "Fontes:" or "Sources:" section the sub-agent included, VERBATIM. Don't
   add, remove, paraphrase, or summarize URLs.
-- If the sub-agent did NOT include a Sources section, YOU DO NOT ADD ONE.
-  Do not write "Sources: Lonely Planet, etc." No exceptions.
+- If the sub-agent did NOT include a sources section, YOU DO NOT ADD ONE.
+  Do not write "Fontes: Lonely Planet, etc." No exceptions.
 - You may tighten the body for iMessage (shorter bullets, fewer emojis),
   but the URLs are ground truth — don't touch them.
 
@@ -122,15 +127,15 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     tools: [
       tool(
         "send_ack",
-        `Send a short acknowledgment message to the user IMMEDIATELY, before a slow operation. Use this BEFORE spawn_agent so the user knows you heard them and are working on it. Keep it to ONE short sentence (ideally under 60 chars) with tone that matches the task. Examples: "On it — one sec 🔍", "Looking into it…", "Drafting now, hold tight.", "Let me check your calendar."`,
+        `Envie uma confirmação curta ao usuário IMEDIATAMENTE, antes de uma operação lenta. Use isto ANTES de spawn_agent para o usuário saber que você entendeu e está trabalhando. Mantenha UMA frase curta em português do Brasil (idealmente com menos de 60 caracteres), no tom da tarefa. Exemplos: "Já vejo isso — um segundo 🔍", "Vou conferir…", "Rascunhando agora.", "Vou checar sua agenda."`,
         {
-          message: z.string().describe("1 short sentence ack. No markdown. Emojis OK."),
+          message: z.string().describe("1 frase curta em pt-BR. Sem markdown. Emojis OK."),
         },
         async (args) => {
           const text = args.message.trim();
           if (!text) {
             return {
-              content: [{ type: "text" as const, text: "Empty ack skipped." }],
+              content: [{ type: "text" as const, text: "Ack vazio ignorado." }],
             };
           }
           if (opts.conversationId.startsWith("sms:")) {
@@ -149,7 +154,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
           });
           log(`→ ack: ${text}`);
           return {
-            content: [{ type: "text" as const, text: "Ack sent to user." }],
+            content: [{ type: "text" as const, text: "Ack enviado ao usuário." }],
           };
         },
       ),
@@ -162,11 +167,11 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     tools: [
       tool(
         "spawn_agent",
-        "Spawn a focused sub-agent to do real work using external tools. Returns the agent's final answer. Use for anything requiring lookups, drafting, or actions in the user's integrations.",
+        "Spawn a focused sub-agent to do real work using external tools. Returns the agent's final answer. Use for anything requiring lookups, drafting, or actions in the user's integrations. Ask the sub-agent to respond in Brazilian Portuguese unless the user requested another language.",
         {
           task: z
             .string()
-            .describe("Crisp task description — what to find/draft/do, not the raw user message."),
+            .describe("Crisp task description — what to find/draft/do, not the raw user message. Include that the final answer should be in Brazilian Portuguese unless the user asked otherwise."),
           integrations: z
             .array(z.string())
             .describe(`Which integrations to give the agent. Available: ${integrations.join(", ") || "(none)"}`),
@@ -280,10 +285,10 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     }
   } catch (err) {
     console.error(`[turn ${tag}] query failed`, err);
-    reply = "Sorry — I hit an error processing that. Try again in a moment.";
+    reply = "Foi mal — tive um erro processando isso. Tenta de novo daqui a pouco.";
   }
 
-  reply = reply.trim() || "(no reply)";
+  reply = reply.trim() || "(sem resposta)";
 
   if (usage.costUsd > 0 || usage.inputTokens > 0) {
     log(
