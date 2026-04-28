@@ -48,19 +48,25 @@ export function detectAnomalies(
 ): Anomaly[] {
   const anomalies: Anomaly[] = [];
 
-  // 1. Cost spike: this week vs median of prior 4 weeks
+  // 1. Cost spike: this week vs median of prior 4 weeks. "Has data" means the
+  // week had at least one row, not that costUsd > 0 — a quiet $0 week is real
+  // signal, and excluding it would inflate the median and hide spikes.
   const weekBoundary = now - weekMs;
   const fourWeeksAgo = now - 5 * weekMs;
   const thisWeek = rows
     .filter((r) => r.createdAt >= weekBoundary && r.createdAt < now)
     .reduce((s, r) => s + r.costUsd, 0);
   const priorByWeek: number[] = [0, 0, 0, 0];
+  const priorHasRows: boolean[] = [false, false, false, false];
   for (const r of rows) {
     if (r.createdAt < fourWeeksAgo || r.createdAt >= weekBoundary) continue;
     const w = Math.floor((weekBoundary - r.createdAt) / weekMs);
-    if (w >= 0 && w < 4) priorByWeek[w] += r.costUsd;
+    if (w >= 0 && w < 4) {
+      priorByWeek[w] += r.costUsd;
+      priorHasRows[w] = true;
+    }
   }
-  const priorWithData = priorByWeek.filter((w) => w > 0);
+  const priorWithData = priorByWeek.filter((_, i) => priorHasRows[i]);
   if (priorWithData.length >= 2) {
     const median = medianOf(priorWithData);
     if (median > 0 && thisWeek > COST_SPIKE_MULTIPLIER * median) {
@@ -86,7 +92,7 @@ export function detectAnomalies(
       anomalies.push({
         kind: "low_cache_hit",
         severity: "medium",
-        message: `Dispatcher cache hit ${(rate * 100).toFixed(0)}% (alvo >= 70%)`,
+        message: `Dispatcher cache hit ${(rate * 100).toFixed(0)}% (abaixo do alvo de 50%)`,
       });
     }
   }
