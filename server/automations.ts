@@ -4,6 +4,7 @@ import { convex } from "./convex-client.js";
 import { spawnExecutionAgent } from "./execution-agent.js";
 import { sendTelegramMessage } from "./telegram.js";
 import { broadcast } from "./broadcast.js";
+import { ensureCostDigestAutomation } from "./cost-digest.js";
 
 function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -108,6 +109,10 @@ export async function tickAutomations(): Promise<void> {
 }
 
 export function startAutomationLoop(intervalMs = 30_000): () => void {
+  // Idempotent: registers (disabled) on first boot, no-ops thereafter.
+  ensureCostDigestAutomation().catch((err) =>
+    console.error("[automations] ensureCostDigestAutomation failed", err),
+  );
   const timer = setInterval(() => {
     tickAutomations().catch((err) => console.error("[automations] tick error", err));
   }, intervalMs);
