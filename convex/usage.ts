@@ -119,3 +119,68 @@ export const bySource = query({
     }));
   },
 });
+
+export const byConversation = query({
+  args: { range: rangeV, limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const rows = await scanRange(ctx, args.range);
+    const limit = args.limit ?? 10;
+    const buckets = new Map<
+      string,
+      { conversationId: string; costUsd: number; callCount: number; lastActivityAt: number }
+    >();
+    for (const r of rows) {
+      if (!r.conversationId) continue;
+      const b = buckets.get(r.conversationId) ?? {
+        conversationId: r.conversationId,
+        costUsd: 0,
+        callCount: 0,
+        lastActivityAt: 0,
+      };
+      b.costUsd += r.costUsd;
+      b.callCount += 1;
+      if (r.createdAt > b.lastActivityAt) b.lastActivityAt = r.createdAt;
+      buckets.set(r.conversationId, b);
+    }
+    return [...buckets.values()]
+      .sort((a, b) => b.costUsd - a.costUsd)
+      .slice(0, limit);
+  },
+});
+
+export const byDay = query({
+  args: { range: rangeV },
+  handler: async (ctx, args) => {
+    const rows = await scanRange(ctx, args.range);
+    const days = new Map<
+      string,
+      {
+        day: string;
+        costUsd: number;
+        costBySource: {
+          dispatcher: number;
+          execution: number;
+          extract: number;
+          consolidation: number;
+        };
+      }
+    >();
+    for (const r of rows) {
+      const d = new Date(r.createdAt);
+      d.setUTCHours(0, 0, 0, 0);
+      const key = d.toISOString().slice(0, 10);
+      const bucket = days.get(key) ?? {
+        day: key,
+        costUsd: 0,
+        costBySource: { dispatcher: 0, execution: 0, extract: 0, consolidation: 0 },
+      };
+      bucket.costUsd += r.costUsd;
+      const srcKey: keyof typeof bucket.costBySource = r.source.startsWith("consolidation")
+        ? "consolidation"
+        : (r.source as "dispatcher" | "execution" | "extract");
+      bucket.costBySource[srcKey] += r.costUsd;
+      days.set(key, bucket);
+    }
+    return [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
+  },
+});
