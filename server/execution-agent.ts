@@ -5,6 +5,7 @@ import { broadcast } from "./broadcast.js";
 import { buildMcpServersForIntegrations, listIntegrations } from "./integrations/registry.js";
 import { createDraftStagingMcp } from "./draft-tools.js";
 import { aggregateUsageFromResult, EMPTY_USAGE, type UsageTotals } from "./usage.js";
+import { getRuntimeModel } from "./runtime-config.js";
 
 const running = new Map<string, AbortController>();
 
@@ -12,22 +13,56 @@ function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Composio surfaces the targeted account in a few different shapes depending on
+// the tool. Pull whichever one is present so multi-account runs (e.g. 3 Gmail
+// inboxes) make the chosen account visible per call.
+function extractAccounts(input: unknown): string[] {
+  if (!input || typeof input !== "object") return [];
+  const accounts = new Set<string>();
+  const collect = (v: unknown) => {
+    if (typeof v === "string" && v.trim()) accounts.add(v.trim());
+  };
+  const obj = input as Record<string, unknown>;
+  // Direct fields on the top-level call (single-execute, native Composio tools).
+  collect(obj.account);
+  collect(obj.connectedAccountId);
+  collect(obj.connected_account_id);
+  if (Array.isArray(obj.accounts)) obj.accounts.forEach(collect);
+  // COMPOSIO_MULTI_EXECUTE_TOOL fans out: { tools: [{ account, ... }] }.
+  if (Array.isArray(obj.tools)) {
+    for (const t of obj.tools) {
+      if (t && typeof t === "object") {
+        const tt = t as Record<string, unknown>;
+        collect(tt.account);
+        collect(tt.connectedAccountId);
+        collect(tt.connected_account_id);
+      }
+    }
+  }
+  return [...accounts];
+}
+
 const EXECUTION_SYSTEM = `You are a focused background worker for the user.
+
+Language:
+- Return your final answer in Brazilian Portuguese by default.
+- Keep another language only if the user explicitly requested it.
+- Drafts and summaries should also be in Brazilian Portuguese unless the user asked otherwise.
 
 Your job:
 1. Perform the task you were given, end to end.
-2. Use your tools — WebSearch, WebFetch, and any integrations loaded for this spawn — to investigate and act.
-3. Return a concise, well-structured answer — not a data dump.
+2. Use your tools (WebSearch, WebFetch, and any integrations loaded for this spawn) to investigate and act.
+3. Return a concise, well-structured answer, not a data dump.
 
 Research discipline:
 - Prefer WebSearch for fresh/factual questions. WebFetch when you need the content of a known URL.
-- Cite real URLs only — NEVER invent sources. If a page failed to load, say so.
+- Cite real URLs only. NEVER invent sources. If a page failed to load, say so.
 - Cross-check when it matters: one search is rarely enough for a claim.
 
 MANDATORY: for any task that used WebSearch or WebFetch, end your response with
-a "Sources:" section listing the ACTUAL URLs you fetched or found. Example:
+a "Fontes:" section listing the ACTUAL URLs you fetched or found. Example:
 
-  Sources:
+  Fontes:
   - https://www.lonelyplanet.com/japan/tokyo
   - https://www.japan-guide.com/e/e3008.html
 
@@ -37,9 +72,12 @@ output to the user verbatim, so if you don't include URLs, the user won't see
 any.
 
 Style:
-- Optimize for iMessage delivery: short sentences, bullets over paragraphs, no tables.
-- Prefer markdown with **bold** keywords and • bullets.
-- Under 500 words unless explicitly asked for more.
+- Voice: Jarvis from Iron Man. Composed, confident, conversational. Full natural sentences with quiet authority. Dry wit when it lands; never goofy, never perky, never chatbot-cheery ("Claro!", "Com certeza!", "Fico feliz em..."). Don't overcompensate into curt robot either.
+- Match the size of the request. A small ask gets a small answer; depth only when the user actually needs it. Don't lecture, don't enumerate caveats, don't explain how the system works unless asked.
+- Don't break the fourth wall: no "tool", "context", "memory store", "sub-agent", "passed in". Speak as a single coherent agent.
+- Don't use em-dashes (—). Use commas, periods, or parentheses instead.
+- Optimize for Telegram delivery: short sentences, bullets over paragraphs, no tables.
+- Markdown sparingly: **bold** keywords, • bullets when a list is the right shape.
 - If you can't complete something, say why in one sentence.
 
 Safety:
@@ -108,7 +146,7 @@ export async function spawnExecutionAgent(opts: SpawnOptions): Promise<SpawnResu
   let status: "completed" | "failed" | "cancelled" = "completed";
   let errorMsg: string | undefined;
 
-  const requestedModel = process.env.BOOP_MODEL ?? "claude-sonnet-4-6";
+  const requestedModel = await getRuntimeModel();
   try {
     for await (const msg of query({
       prompt: opts.task,
@@ -135,14 +173,17 @@ export async function spawnExecutionAgent(opts: SpawnOptions): Promise<SpawnResu
             });
           } else if (block.type === "tool_use") {
             const toolShort = block.name.replace(/^mcp__[a-z-]+__/, "");
-            logAgent(`tool: ${toolShort}`);
+            const accounts = extractAccounts(block.input);
+            const acctSuffix = accounts.length ? ` [${accounts.join(", ")}]` : "";
+            logAgent(`tool: ${toolShort}${acctSuffix}`);
             await convex.mutation(api.agents.addLog, {
               agentId,
               logType: "tool_use",
               toolName: block.name,
+              ...(accounts.length ? { accounts } : {}),
               content: JSON.stringify(block.input).slice(0, 2000),
             });
-            broadcast("agent_tool", { agentId, toolName: block.name });
+            broadcast("agent_tool", { agentId, toolName: block.name, accounts });
           }
         }
       } else if (msg.type === "user") {
