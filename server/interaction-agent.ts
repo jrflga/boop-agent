@@ -8,7 +8,7 @@ import { availableIntegrations, spawnExecutionAgent } from "./execution-agent.js
 import { createAutomationMcp } from "./automation-tools.js";
 import { createDraftDecisionMcp } from "./draft-tools.js";
 import { broadcast } from "./broadcast.js";
-import { sendImessage } from "./sendblue.js";
+import { sendTelegramMessage } from "./telegram.js";
 import { aggregateUsageFromResult, EMPTY_USAGE, type UsageTotals } from "./usage.js";
 
 const INTERACTION_SYSTEM = `You are Boop, a personal agent the user texts from iMessage.
@@ -146,9 +146,9 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               content: [{ type: "text" as const, text: "Ack vazio ignorado." }],
             };
           }
-          if (opts.conversationId.startsWith("sms:")) {
-            const number = opts.conversationId.slice(4);
-            await sendImessage(number, text);
+          if (opts.conversationId.startsWith("telegram:")) {
+            const chatId = opts.conversationId.slice("telegram:".length);
+            await sendTelegramMessage(chatId, text);
           }
           await convex.mutation(api.messages.send, {
             conversationId: opts.conversationId,
