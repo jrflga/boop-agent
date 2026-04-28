@@ -6,6 +6,7 @@ import { buildMcpServersForIntegrations, listIntegrations } from "./integrations
 import { createDraftStagingMcp } from "./draft-tools.js";
 import { aggregateUsageFromResult, EMPTY_USAGE, type UsageTotals } from "./usage.js";
 import { getRuntimeModel } from "./runtime-config.js";
+import { detectAuthMethod } from "./auth-detect.js";
 
 const running = new Map<string, AbortController>();
 
@@ -247,6 +248,7 @@ export async function spawnExecutionAgent(opts: SpawnOptions): Promise<SpawnResu
       cacheReadTokens: usage.cacheReadTokens,
       cacheCreationTokens: usage.cacheCreationTokens,
       costUsd: usage.costUsd,
+      authMethod: detectAuthMethod(),
       durationMs: Date.now() - agentStart,
     });
   }

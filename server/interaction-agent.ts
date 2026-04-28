@@ -13,6 +13,7 @@ import { getRuntimeModel } from "./runtime-config.js";
 import { broadcast } from "./broadcast.js";
 import { sendTelegramMessage } from "./telegram.js";
 import { aggregateUsageFromResult, EMPTY_USAGE, type UsageTotals } from "./usage.js";
+import { detectAuthMethod } from "./auth-detect.js";
 
 const INTERACTION_SYSTEM = `You are Boop, a personal agent the user texts from Telegram.
 
@@ -365,6 +366,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
       cacheReadTokens: usage.cacheReadTokens,
       cacheCreationTokens: usage.cacheCreationTokens,
       costUsd: usage.costUsd,
+      authMethod: detectAuthMethod(),
       durationMs: Date.now() - turnStart,
     });
   }

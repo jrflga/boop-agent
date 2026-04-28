@@ -23,6 +23,7 @@ export const record = mutation({
     cacheReadTokens: v.number(),
     cacheCreationTokens: v.number(),
     costUsd: v.number(),
+    authMethod: v.optional(v.union(v.literal("api"), v.literal("subscription"), v.literal("unknown"))),
     durationMs: v.number(),
   },
   handler: async (ctx, args) => {
