@@ -9,6 +9,7 @@ import {
   Link04Icon,
   DashboardSquare01Icon,
   ArrowShrink02Icon,
+  MoneyBag02Icon,
 } from "@hugeicons/core-free-icons";
 import { api } from "../../convex/_generated/api.js";
 import { useSocket } from "./lib/useSocket.js";
@@ -19,9 +20,11 @@ import { MemoryPanel } from "./components/MemoryPanel.js";
 import { EventsPanel } from "./components/EventsPanel.js";
 import { ConnectionsPanel } from "./components/ConnectionsPanel.js";
 import { ConsolidationPanel } from "./components/ConsolidationPanel.js";
+import { ConsumoPanel } from "./components/ConsumoPanel.js";
 
 type View =
   | "dashboard"
+  | "consumo"
   | "agents"
   | "automations"
   | "memory"
@@ -33,6 +36,7 @@ type Theme = "dark" | "light";
 
 const NAV_ICONS: Record<View, any> = {
   dashboard: DashboardSquare01Icon,
+  consumo: MoneyBag02Icon,
   agents: MachineRobotIcon,
   automations: WorkflowCircle03Icon,
   memory: AiBrain02Icon,
@@ -43,6 +47,7 @@ const NAV_ICONS: Record<View, any> = {
 
 const NAV: { id: View; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "consumo", label: "Consumo" },
   { id: "agents", label: "Agents" },
   { id: "automations", label: "Automations" },
   { id: "memory", label: "Memory" },
@@ -218,6 +223,7 @@ export function App() {
         <main className="flex-1 min-w-0 overflow-hidden debug-scroll">
           <div className="h-full overflow-auto debug-scroll p-5 fade-in">
             {view === "dashboard" && <DashboardPanel isDark={isDark} />}
+            {view === "consumo" && <ConsumoPanel isDark={isDark} />}
             {view === "agents" && <AgentsPanel isDark={isDark} />}
             {view === "automations" && <AutomationsPanel isDark={isDark} />}
             {view === "memory" && <MemoryPanel isDark={isDark} />}
