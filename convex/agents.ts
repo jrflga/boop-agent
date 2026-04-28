@@ -108,3 +108,12 @@ export const getLogs = query({
       .take(args.limit ?? 500);
   },
 });
+
+export const recentLogs = query({
+  args: { sinceMs: v.number(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 10_000;
+    const logs = await ctx.db.query("agentLogs").order("desc").take(limit);
+    return logs.filter((l) => l._creationTime >= args.sinceMs);
+  },
+});
