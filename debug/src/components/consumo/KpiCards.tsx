@@ -13,6 +13,7 @@ interface TopConversation {
 interface Props {
   summary: Summary | undefined;
   top: TopConversation | undefined;
+  fixedMonthlyUsd: number | undefined;
   isDark: boolean;
 }
 
@@ -29,7 +30,7 @@ function shortConv(id: string): string {
   return id.length > 12 ? id.slice(0, 12) + "..." : id;
 }
 
-export function KpiCards({ summary, top, isDark }: Props) {
+export function KpiCards({ summary, top, fixedMonthlyUsd, isDark }: Props) {
   const cardCls = isDark
     ? "border-slate-800 bg-slate-900/40"
     : "border-slate-200 bg-white";
@@ -60,10 +61,15 @@ export function KpiCards({ summary, top, isDark }: Props) {
       value: top ? fmtUsd(top.costUsd) : "—",
       sub: top ? shortConv(top.conversationId) : "sem dados",
     },
+    {
+      label: "Custos fixos / mês",
+      value: fixedMonthlyUsd !== undefined ? fmtUsd(fixedMonthlyUsd) : "—",
+      sub: "subscriptions cadastradas",
+    },
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
       {cards.map((c) => (
         <div
           key={c.label}

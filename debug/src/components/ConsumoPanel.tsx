@@ -8,6 +8,12 @@ import { TopConversationsList } from "./consumo/TopConversationsList.js";
 import { DrillDownTable } from "./consumo/DrillDownTable.js";
 import { ConversationDrilldown } from "./consumo/ConversationDrilldown.js";
 import { AnomalyBadge } from "./consumo/AnomalyBadge.js";
+import { ServicesPanel } from "./consumo/ServicesPanel.js";
+import { ClaudeBreakEvenCard } from "./consumo/ClaudeBreakEvenCard.js";
+import { getAdminToken } from "../lib/adminAuth.js";
+
+// Same-origin via vite proxy: /api/* is rewritten to / on the boop server.
+const SERVER_ORIGIN = "/api";
 
 type Range = "today" | "7d" | "30d" | "all";
 
@@ -32,6 +38,14 @@ export function ConsumoPanel({ isDark }: Props) {
   const top = useQuery(api.usage.byConversation, { range, limit: 10 });
   const caching = useQuery(api.usage.cachingStats, { range });
   const anomalies = useQuery(api.usage.anomalies, { range });
+
+  const services = useQuery(api.services.list, {});
+  const fixedMonthly = useQuery(api.services.monthlyTotal, {});
+  // Anthropic-specific service for break-even card
+  const anthropicService = services?.find((s: any) => s.key === "anthropic");
+  // Summary scoped to the current month for break-even comparison
+  const monthSummary = useQuery(api.usage.summary, { range: "30d" });
+  const adminToken = getAdminToken();
 
   // Mark bySource as intentionally referenced to keep the warm cache without TS6133.
   void bySource;
@@ -77,7 +91,24 @@ export function ConsumoPanel({ isDark }: Props) {
         </div>
       </div>
 
-      <KpiCards summary={summary} top={top?.[0]} isDark={isDark} />
+      <ServicesPanel
+        isDark={isDark}
+        serverOrigin={SERVER_ORIGIN}
+        adminToken={adminToken}
+      />
+
+      <ClaudeBreakEvenCard
+        anthropicService={anthropicService}
+        monthSummary={monthSummary}
+        isDark={isDark}
+      />
+
+      <KpiCards
+        summary={summary}
+        top={top?.[0]}
+        fixedMonthlyUsd={fixedMonthly}
+        isDark={isDark}
+      />
 
       {anomalies && anomalies.length > 0 && (
         <AnomalyBadge anomalies={anomalies} isDark={isDark} />
