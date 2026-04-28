@@ -14,6 +14,7 @@ import { startConsolidationLoop } from "./consolidation.js";
 import { cancelAgent, retryAgent } from "./execution-agent.js";
 import { createComposioRouter } from "./composio-routes.js";
 import { adminTokenFromUpgrade, isAdminTokenValid, requireAdminToken } from "./http-auth.js";
+import { createServicesRouter, ensureSeedServices } from "./services-routes.js";
 
 async function main() {
   await loadIntegrations();
@@ -21,6 +22,9 @@ async function main() {
   startAutomationLoop();
   startHeartbeatLoop();
   startConsolidationLoop();
+  ensureSeedServices().catch((err) =>
+    console.error("[services] seed failed", err),
+  );
 
   const app = express();
   app.use(cors());
@@ -33,6 +37,7 @@ async function main() {
   app.use("/telegram", createTelegramRouter());
   app.use(requireAdminToken);
   app.use("/composio", createComposioRouter());
+  app.use("/services", createServicesRouter());
 
   app.post("/agents/:id/cancel", (req, res) => {
     const ok = cancelAgent(req.params.id);
