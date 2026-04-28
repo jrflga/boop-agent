@@ -52,6 +52,16 @@ export const get = query({
   },
 });
 
+export const getByName = query({
+  args: { name: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("automations")
+      .filter((q) => q.eq(q.field("name"), args.name))
+      .first();
+  },
+});
+
 export const setEnabled = mutation({
   args: { automationId: v.string(), enabled: v.boolean() },
   handler: async (ctx, args) => {
