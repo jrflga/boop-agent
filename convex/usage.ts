@@ -1,6 +1,7 @@
 import { query } from "./_generated/server.js";
 import { v } from "convex/values";
 import { rangeStart, type RangeKey } from "./lib/timeRange.js";
+import { savedFromCacheRead } from "./lib/pricing.js";
 
 const rangeV = v.union(
   v.literal("today"),
@@ -182,5 +183,90 @@ export const byDay = query({
       days.set(key, bucket);
     }
     return [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
+  },
+});
+
+export const cachingStats = query({
+  args: { range: rangeV },
+  handler: async (ctx, args) => {
+    const rows = await scanRange(ctx, args.range);
+    const buckets = new Map<
+      string,
+      {
+        source: string;
+        cacheReadTokens: number;
+        inputTokens: number;
+        savedUsd: number;
+      }
+    >();
+    let totalSavedUsd = 0;
+    for (const r of rows) {
+      const b = buckets.get(r.source) ?? {
+        source: r.source,
+        cacheReadTokens: 0,
+        inputTokens: 0,
+        savedUsd: 0,
+      };
+      b.cacheReadTokens += r.cacheReadTokens;
+      b.inputTokens += r.inputTokens;
+      const saved = savedFromCacheRead(r.model, r.cacheReadTokens);
+      b.savedUsd += saved;
+      totalSavedUsd += saved;
+      buckets.set(r.source, b);
+    }
+
+    // Broken-cache count: dispatcher records with cacheReadTokens=0 whose
+    // immediately-previous dispatcher record on the same conversation was
+    // within 5 minutes.
+    const dispatcherRows = rows
+      .filter((r: any) => r.source === "dispatcher" && r.conversationId)
+      .sort((a: any, b: any) => a.createdAt - b.createdAt);
+    const lastByConv = new Map<string, { createdAt: number }>();
+    let brokenCacheCount = 0;
+    for (const r of dispatcherRows) {
+      const prev = lastByConv.get(r.conversationId!);
+      if (
+        prev &&
+        r.createdAt - prev.createdAt <= 5 * 60 * 1000 &&
+        r.cacheReadTokens === 0
+      ) {
+        brokenCacheCount += 1;
+      }
+      lastByConv.set(r.conversationId!, { createdAt: r.createdAt });
+    }
+
+    return {
+      perSource: [...buckets.values()].map((b) => ({
+        source: b.source,
+        hitRate:
+          b.cacheReadTokens + b.inputTokens > 0
+            ? b.cacheReadTokens / (b.cacheReadTokens + b.inputTokens)
+            : 0,
+        savedUsd: b.savedUsd,
+      })),
+      totalSavedUsd,
+      brokenCacheCount,
+    };
+  },
+});
+
+export const contextSizes = query({
+  args: { conversationId: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 200;
+    const rows = await ctx.db
+      .query("usageRecords")
+      .withIndex("by_conversation", (q: any) =>
+        q.eq("conversationId", args.conversationId),
+      )
+      .order("asc")
+      .take(limit);
+    return rows.map((r: any) => ({
+      turnId: r.turnId,
+      createdAt: r.createdAt,
+      contextTokens: r.inputTokens + r.cacheReadTokens + r.cacheCreationTokens,
+      costUsd: r.costUsd,
+      source: r.source,
+    }));
   },
 });
