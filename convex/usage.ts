@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { rangeStart, type RangeKey } from "./lib/timeRange.js";
 import { savedFromCacheRead } from "./lib/pricing.js";
+import { detectAnomalies } from "./lib/anomalies.js";
 
 const rangeV = v.union(
   v.literal("today"),
@@ -294,5 +295,21 @@ export const recentRecords = query({
         return true;
       }),
     };
+  },
+});
+
+export const anomalies = query({
+  args: { range: rangeV },
+  handler: async (ctx, args) => {
+    // Always pull a 5-week window; cost_spike needs prior weeks regardless
+    // of the caller's `range`.
+    const fiveWeeksAgo = Date.now() - 5 * 7 * 24 * 60 * 60 * 1000;
+    const start = Math.min(rangeStart(args.range), fiveWeeksAgo);
+    const rows = await ctx.db
+      .query("usageRecords")
+      .withIndex("by_created_at", (q: any) => q.gte("createdAt", start))
+      .order("desc")
+      .take(SCAN_CAP);
+    return detectAnomalies(rows as any, args.range);
   },
 });
