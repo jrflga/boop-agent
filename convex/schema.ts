@@ -113,7 +113,8 @@ export default defineSchema({
   })
     .index("by_conversation", ["conversationId"])
     .index("by_agent", ["agentId"])
-    .index("by_source", ["source"]),
+    .index("by_source", ["source"])
+    .index("by_created_at", ["createdAt"]),
 
   agentLogs: defineTable({
     agentId: v.string(),
