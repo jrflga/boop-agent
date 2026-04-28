@@ -125,6 +125,10 @@ export default defineSchema({
       v.literal("error"),
     ),
     toolName: v.optional(v.string()),
+    // Composio account aliases targeted by this tool call (e.g. ["gmail_charry-fusc"]).
+    // Populated when the input names a specific connected account, so multi-account
+    // toolkits make it visible which inbox / workspace was actually hit.
+    accounts: v.optional(v.array(v.string())),
     content: v.string(),
     createdAt: v.number(),
   }).index("by_agent", ["agentId"]),
@@ -156,10 +160,11 @@ export default defineSchema({
     .index("by_automation_id", ["automationId"])
     .index("by_enabled", ["enabled"]),
 
-  sendblueDedup: defineTable({
+  webhookDedup: defineTable({
+    provider: v.string(),
     handle: v.string(),
     claimedAt: v.number(),
-  }).index("by_handle", ["handle"]),
+  }).index("by_provider_handle", ["provider", "handle"]),
 
   drafts: defineTable({
     draftId: v.string(),
@@ -216,4 +221,13 @@ export default defineSchema({
   })
     .index("by_automation", ["automationId"])
     .index("by_run_id", ["runId"]),
+
+  // Runtime overrides for things normally pinned by env vars (e.g. the Claude
+  // model). Lets the user say "use opus" via Telegram and have the next agent
+  // run respect it without a redeploy.
+  settings: defineTable({
+    key: v.string(),
+    value: v.string(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
 });

@@ -47,6 +47,12 @@ const TOOL_BRANDS: ToolBrand[] = [
     aliases: ["salesforce"],
   },
   { key: "discord", displayName: "Discord", domain: "discord.com", aliases: ["discord"] },
+  {
+    key: "whatsapp",
+    displayName: "WhatsApp Business",
+    domain: "whatsapp.com",
+    aliases: ["whatsapp", "whatsapp-business"],
+  },
   { key: "twitter", displayName: "Twitter", domain: "twitter.com", aliases: ["twitter", "x"] },
   { key: "linkedin", displayName: "LinkedIn", domain: "linkedin.com", aliases: ["linkedin"] },
   { key: "trello", displayName: "Trello", domain: "trello.com", aliases: ["trello"] },

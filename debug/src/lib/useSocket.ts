@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { withAdminToken } from "./adminAuth.js";
 
 export interface SocketEvent {
   event: string;
@@ -19,7 +20,7 @@ export function useSocket(onEvent?: (e: SocketEvent) => void) {
     function connect() {
       if (cancelled) return;
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${location.host}/ws`;
+      const url = `${proto}//${location.host}${withAdminToken("/ws")}`;
       ws = new WebSocket(url);
       ws.onopen = () => setConnected(true);
       ws.onclose = () => {
