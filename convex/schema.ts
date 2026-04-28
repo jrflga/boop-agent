@@ -108,6 +108,13 @@ export default defineSchema({
     cacheReadTokens: v.number(),
     cacheCreationTokens: v.number(),
     costUsd: v.number(),
+    authMethod: v.optional(
+      v.union(
+        v.literal("api"),
+        v.literal("subscription"),
+        v.literal("unknown"),
+      ),
+    ),
     durationMs: v.number(),
     createdAt: v.number(),
   })
@@ -229,6 +236,22 @@ export default defineSchema({
   settings: defineTable({
     key: v.string(),
     value: v.string(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
+  services: defineTable({
+    // Stable key like "anthropic", "composio", "convex", "other-<name>"
+    key: v.string(),
+    displayName: v.string(),
+    monthlyCostUsd: v.number(),
+    planName: v.optional(v.string()),
+    // Free-form numeric limits (e.g. { tool_executions: 100000, connected_accounts: 10 })
+    planLimits: v.optional(v.string()), // JSON-encoded for flexibility
+    lastFetchAt: v.optional(v.number()),
+    // JSON-encoded usage snapshot from the fetcher
+    usageSnapshot: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 });
