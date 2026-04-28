@@ -1,5 +1,6 @@
 import { query } from "./_generated/server.js";
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { rangeStart, type RangeKey } from "./lib/timeRange.js";
 import { savedFromCacheRead } from "./lib/pricing.js";
 
@@ -268,5 +269,30 @@ export const contextSizes = query({
       costUsd: r.costUsd,
       source: r.source,
     }));
+  },
+});
+
+export const recentRecords = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    source: sourceFilterV,
+    conversationId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const result = await ctx.db
+      .query("usageRecords")
+      .withIndex("by_created_at")
+      .order("desc")
+      .paginate(args.paginationOpts);
+    if (!args.source && !args.conversationId) return result;
+    return {
+      ...result,
+      page: result.page.filter((r: any) => {
+        if (args.source && r.source !== args.source) return false;
+        if (args.conversationId && r.conversationId !== args.conversationId)
+          return false;
+        return true;
+      }),
+    };
   },
 });
