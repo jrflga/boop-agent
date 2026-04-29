@@ -28,6 +28,44 @@ export function validateSchedule(schedule: string): { valid: boolean; error?: st
   }
 }
 
+// Normalize a raw spawn result into a clean line list:
+//   - trim leading/trailing whitespace per line
+//   - drop empty lines (after trimming)
+// Cases the caller relies on:
+//   - multi-line input with mixed whitespace and empty interleaved lines → all
+//     non-empty lines, trimmed, in original order
+//   - single-line input → one-element array
+//   - fully empty / whitespace-only input → empty array
+export function normalizeSnapshot(raw: string): string[] {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+// Pure set-difference: lines in `curr` that are not in `prev`.
+// Cases:
+//   - empty prev → returns all of curr (caller must skip notification on the
+//     baseline first tick by checking lastSnapshot === undefined, not by
+//     looking at the diff)
+//   - identical prev/curr → empty array
+//   - one new line → one-element array
+//   - complete replacement → all of curr
+//   - duplicate lines in curr (same line appears twice) → returned at most
+//     once (deduplicated against the prev set, then deduplicated against
+//     itself via the same membership test)
+export function diffAdditions(prev: string[], curr: string[]): string[] {
+  const prevSet = new Set(prev);
+  const seen = new Set<string>();
+  const additions: string[] = [];
+  for (const line of curr) {
+    if (prevSet.has(line) || seen.has(line)) continue;
+    additions.push(line);
+    seen.add(line);
+  }
+  return additions;
+}
+
 async function runAutomation(a: {
   automationId: string;
   name: string;
