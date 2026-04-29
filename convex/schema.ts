@@ -205,15 +205,6 @@ export default defineSchema({
     .index("by_run_id", ["runId"])
     .index("by_status", ["status"]),
 
-  // Runtime overrides for things normally pinned by env vars (e.g. the Claude
-  // model). Lets the user say "use opus" via iMessage and have the next agent
-  // run respect it without a redeploy.
-  settings: defineTable({
-    key: v.string(),
-    value: v.string(),
-    updatedAt: v.number(),
-  }).index("by_key", ["key"]),
-
   automationRuns: defineTable({
     runId: v.string(),
     automationId: v.string(),
