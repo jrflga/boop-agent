@@ -89,6 +89,7 @@ export interface SpawnOptions {
   integrations: string[];
   conversationId?: string;
   name?: string;
+  modelOverride?: string;
 }
 
 export interface SpawnResult {
@@ -146,7 +147,7 @@ export async function spawnExecutionAgent(opts: SpawnOptions): Promise<SpawnResu
   let status: "completed" | "failed" | "cancelled" = "completed";
   let errorMsg: string | undefined;
 
-  const requestedModel = await getRuntimeModel();
+  const requestedModel = opts.modelOverride ?? (await getRuntimeModel());
   try {
     for await (const msg of query({
       prompt: opts.task,
