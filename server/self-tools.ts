@@ -34,7 +34,7 @@ export function createSelfMcp() {
             integrationCount: integrations.length,
             composioEnabled: Boolean(process.env.COMPOSIO_API_KEY),
             embeddingsEnabled: Boolean(process.env.VOYAGE_API_KEY),
-            sendblueEnabled: Boolean(process.env.SENDBLUE_API_KEY),
+            telegramEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),
           };
           return {
             content: [{ type: "text" as const, text: JSON.stringify(config, null, 2) }],

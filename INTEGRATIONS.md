@@ -70,3 +70,9 @@ This is a one-time setup per toolkit (not per user) — all users of your Boop i
 - **External actions still use the draft flow.** Execution agents are prompted to call `save_draft` first for anything that writes to the outside world. The dispatcher's `send_draft` is the only path that actually commits.
 - **No tokens live in Boop.** Composio stores OAuth credentials on their side. Boop never sees them.
 - **Tool names are Composio's canonical slugs** (e.g., `GMAIL_LIST_MESSAGES`). The debug dashboard humanizes them for display.
+
+## WhatsApp personal context
+
+Do not use unofficial WhatsApp Web automation for personal read access. For a future read-only WhatsApp context feature, use manual chat exports plus a local privacy/redaction pipeline before any model call.
+
+See [WHATSAPP_READONLY.md](./WHATSAPP_READONLY.md) for the proposed safe design.

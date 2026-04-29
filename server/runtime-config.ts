@@ -5,7 +5,7 @@ const MODEL_KEY = "model";
 const MODEL_TTL_MS = 30 * 1000;
 let cached: { at: number; value: string } | null = null;
 
-// User-friendly aliases the agent can pass through from iMessage. Resolved to
+// User-friendly aliases the agent can pass through from Telegram. Resolved to
 // canonical Anthropic model IDs before being handed to the SDK.
 export const MODEL_ALIASES: Record<string, string> = {
   opus: "claude-opus-4-7",

@@ -80,6 +80,72 @@ Rules:
 - Your rationale should cite the adversary's objection when relevant ("approved despite adversary concern about X because...").
 - Respond with ONLY the JSON.`;
 
+const COMPACTION_PROPOSER_PROMPT = `You are a conservative memory-compaction proposer.
+
+Goal: reduce clutter by combining obviously compatible memories into fewer, richer memories. This is LESS aggressive than consolidation.
+
+Given active memories, propose ONLY safe merges. Return STRICT JSON only:
+{"proposals":[
+  {"type":"merge","keep":"mem_...","absorb":["mem_..."],"rewriteContent":"..."}
+]}
+
+Hard rules:
+- Only propose "merge". Do not propose supersede or prune.
+- Merge only memories from the SAME segment.
+- Merge at most 4 memories in one proposal.
+- The rewrite must preserve every non-conflicting durable fact from every source.
+- Identity facts about the same person, such as name and birthday, are complementary and SHOULD be compacted when the rewrite preserves both.
+- If one memory is a correction of a single field in another memory, keep the corrected value and preserve unrelated facts. Example: "User's name is João Ricardo (corrected from Anu)." + "User's name is Anu. Birthday is September 18th." can become "User's name is João Ricardo. Birthday is September 18th."
+- If one source is already a cleaner duplicate of part of the rewrite, it is still valid to absorb it. Compaction archives absorbed memories via supersedes, so source traceability is preserved.
+- Prefer the most complete or highest-importance memory as "keep".
+- Do not merge if the combined sentence would lose nuance, uncertainty, dates, people, project names, cadence, or constraints.
+- Do not merge memories about similar but distinct subjects.
+- If you are not certain the merge is lossless, skip it.
+
+If no low-risk compaction exists, return {"proposals":[]}. Respond with ONLY the JSON.`;
+
+const COMPACTION_ADVERSARY_PROMPT = `You are a memory-compaction adversary. A proposer suggested conservative merge-only compactions. Your job is to reject anything that might lose information.
+
+For each proposal, look for:
+- distinct facts being blurred into one vague sentence
+- corrected/obsolete values accidentally preserved as current facts
+- unrelated facts joined only because they share a segment
+- any missing detail from the source memories
+- merges that rely on guessing instead of explicit overlap
+- Evaluate each proposal ONLY against its listed source memories. Other active memories are not being changed and remain active.
+- Do NOT object merely because separate source memories become one record. Absorbed memories are archived via supersedes, so traceability is preserved.
+- Do NOT object to compacting complementary identity facts about the same person, such as corrected name + birthday, when the rewrite keeps the corrected value and the birthday.
+- Do NOT object because one absorbed memory is a cleaner duplicate of a fact already represented in the rewrite. That is useful compaction, not information loss.
+
+Return STRICT JSON only. Each challenge MUST include an entry for every proposal index:
+{"challenges":[
+  {"proposalIndex":0,"objection":"the rewrite drops the Thursday schedule","severity":"high"},
+  {"proposalIndex":1,"objection":null,"severity":"low"}
+]}
+
+Use "high" only for concrete missing or incorrect facts. Use "medium" for real uncertainty about whether facts refer to the same subject. Use "low" when the compaction is clearly lossless.
+Respond with ONLY the JSON object.`;
+
+const COMPACTION_JUDGE_PROMPT = `You are a conservative memory-compaction judge. You see merge-only compaction proposals and adversary objections.
+
+Approve only when the merge is clearly lossless and less cluttered than the originals.
+
+Return STRICT JSON only:
+{"decisions":[
+  {"proposalIndex":0,"approve":true,"rationale":"..."},
+  {"proposalIndex":1,"approve":false,"rationale":"..."}
+]}
+
+Rules:
+- Reject every proposal with a high-severity objection.
+- Reject medium-severity objections unless the source memories explicitly prove the rewrite preserves all facts.
+- Ignore objections about memories that are not listed as source memories for that proposal; those memories remain active.
+- Reject if the proposal merges different segments, has no absorbed memory, or the rewrite is vague.
+- Approve only if the rewrite keeps all non-conflicting facts and uses corrected values when a source clearly corrects another.
+- Do not reject solely for source traceability concerns: absorbed records are archived through supersedes.
+- Approve compacting complementary identity facts about the same person, such as corrected name + birthday, when the rewrite preserves both and drops only obsolete corrected-from values as current facts.
+- Respond with ONLY the JSON.`;
+
 interface Proposal {
   type: "merge" | "supersede" | "prune";
   keep?: string;
@@ -110,6 +176,35 @@ interface Applied {
   proposalIndex: number;
   type: "merge" | "supersede" | "prune";
   summary: string;
+}
+
+interface MemoryForConsolidation {
+  memoryId: string;
+  content: string;
+  tier: "short" | "long" | "permanent";
+  segment:
+    | "identity"
+    | "preference"
+    | "correction"
+    | "relationship"
+    | "project"
+    | "knowledge"
+    | "context";
+  importance: number;
+  decayRate: number;
+  accessCount: number;
+  lastAccessedAt: number;
+  createdAt: number;
+  metadata?: string;
+}
+
+interface ConsolidationModeConfig {
+  mode: "consolidation" | "compaction";
+  minimumMemories: number;
+  proposerPrompt: string;
+  adversaryPrompt: string;
+  judgePrompt: string;
+  adversaryModel: string;
 }
 
 async function runLlm(
@@ -169,7 +264,103 @@ function parseJson<T>(raw: string): T | null {
   }
 }
 
-export async function runConsolidation(trigger = "scheduled"): Promise<{
+function buildMemoryPayload(memories: MemoryForConsolidation[]): string {
+  return memories
+    .map((m) => {
+      const ageDays = Math.round((Date.now() - m.createdAt) / 86400000);
+      const prefix = `- [${m.memoryId}] (${m.tier}/${m.segment} i=${m.importance.toFixed(2)} age=${ageDays}d)`;
+      // Surface correction metadata inline so the LLM sees what was being
+      // corrected without having to infer it from content alone.
+      let suffix = "";
+      if (m.segment === "correction" && m.metadata) {
+        try {
+          const meta = JSON.parse(m.metadata) as { corrects?: string };
+          if (meta.corrects) {
+            // Strip `]` and collapse whitespace so user-supplied text
+            // can't break the `[corrects: ...]` annotation format that
+            // proposer/adversary prompts rely on, and can't inject a
+            // fake second memory entry via embedded newlines.
+            const safe = meta.corrects
+              .replace(/[\r\n]+/g, " ")
+              .replace(/\]/g, "")
+              .trim()
+              .slice(0, 300);
+            if (safe) suffix = ` [corrects: ${safe}]`;
+          }
+        } catch {
+          /* metadata not JSON — ignore */
+        }
+      }
+      return `${prefix} ${m.content}${suffix}`;
+    })
+    .join("\n");
+}
+
+function sanitizeCompactionProposals(
+  proposals: Proposal[],
+  memories: MemoryForConsolidation[],
+): Proposal[] {
+  const byId = new Map(memories.map((m) => [m.memoryId, m]));
+  return proposals.filter((p) => {
+    if (p.type !== "merge") return false;
+    if (
+      typeof p.keep !== "string" ||
+      !Array.isArray(p.absorb) ||
+      p.absorb.length === 0 ||
+      typeof p.rewriteContent !== "string" ||
+      !p.rewriteContent.trim()
+    ) {
+      return false;
+    }
+    if (p.absorb.length > 3) return false;
+    if (p.absorb.includes(p.keep)) return false;
+    const keep = byId.get(p.keep);
+    if (!keep) return false;
+    const absorbed = p.absorb.map((id) => byId.get(id));
+    if (absorbed.some((m) => !m)) return false;
+    return absorbed.every((m) => m?.segment === keep.segment);
+  });
+}
+
+function proposalMemoryIds(proposal: Proposal): string[] {
+  const ids = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value === "string") ids.add(value);
+    else if (Array.isArray(value)) {
+      for (const item of value) add(item);
+    }
+  };
+  add(proposal.keep);
+  add(proposal.absorb);
+  add(proposal.newer);
+  add(proposal.older);
+  add(proposal.memoryId);
+  return [...ids];
+}
+
+function buildCompactionReviewPayload(
+  proposals: Proposal[],
+  memories: MemoryForConsolidation[],
+): string {
+  const byId = new Map(memories.map((m) => [m.memoryId, m]));
+  return proposals
+    .map((proposal, index) => {
+      const sourceMemories = proposalMemoryIds(proposal)
+        .map((id) => byId.get(id))
+        .filter((memory): memory is MemoryForConsolidation => Boolean(memory));
+      return [
+        `Proposal #${index} source memories:`,
+        "Only these records are being rewritten or archived. All other active memories remain active.",
+        buildMemoryPayload(sourceMemories),
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+async function runMemoryMaintenance(
+  trigger: string,
+  config: ConsolidationModeConfig,
+): Promise<{
   runId: string;
   proposals: number;
   merged: number;
@@ -183,52 +374,24 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
   let pruned = 0;
 
   try {
-    const memories = await convex.query(api.memoryRecords.list, {
+    const memories: MemoryForConsolidation[] = await convex.query(api.memoryRecords.list, {
       lifecycle: "active",
       limit: 150,
     });
     broadcast("consolidation_phase", { runId, phase: "loaded", memoriesCount: memories.length });
-    if (memories.length < 6) {
+    if (memories.length < config.minimumMemories) {
       await convex.mutation(api.consolidation.updateRun, {
         runId,
         status: "completed",
-        notes: "not enough memories to consolidate",
+        notes: `not enough memories to ${config.mode}`,
       });
       return { runId, proposals: 0, merged: 0, pruned: 0 };
     }
 
-    const payload = memories
-      .map((m) => {
-        const ageDays = Math.round((Date.now() - m.createdAt) / 86400000);
-        const prefix = `- [${m.memoryId}] (${m.tier}/${m.segment} i=${m.importance.toFixed(2)} age=${ageDays}d)`;
-        // Surface correction metadata inline so the LLM sees what was being
-        // corrected without having to infer it from content alone.
-        let suffix = "";
-        if (m.segment === "correction" && m.metadata) {
-          try {
-            const meta = JSON.parse(m.metadata) as { corrects?: string };
-            if (meta.corrects) {
-              // Strip `]` and collapse whitespace so user-supplied text
-              // can't break the `[corrects: ...]` annotation format that
-              // proposer/adversary prompts rely on, and can't inject a
-              // fake second memory entry via embedded newlines.
-              const safe = meta.corrects
-                .replace(/[\r\n]+/g, " ")
-                .replace(/\]/g, "")
-                .trim()
-                .slice(0, 300);
-              if (safe) suffix = ` [corrects: ${safe}]`;
-            }
-          } catch {
-            /* metadata not JSON — ignore */
-          }
-        }
-        return `${prefix} ${m.content}${suffix}`;
-      })
-      .join("\n");
+    const payload = buildMemoryPayload(memories);
 
     broadcast("consolidation_phase", { runId, phase: "proposing" });
-    const proposerCall = await runLlm(PROPOSER_PROMPT, payload);
+    const proposerCall = await runLlm(config.proposerPrompt, payload);
     await recordConsolidationUsage(
       "consolidation-proposer",
       runId,
@@ -236,7 +399,10 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
       proposerCall.durationMs,
     );
     const proposerJson = parseJson<{ proposals: Proposal[] }>(proposerCall.buffer);
-    const proposals = proposerJson?.proposals ?? [];
+    const proposals =
+      config.mode === "compaction"
+        ? sanitizeCompactionProposals(proposerJson?.proposals ?? [], memories)
+        : (proposerJson?.proposals ?? []);
     broadcast("consolidation_phase", {
       runId,
       phase: "proposed",
@@ -261,10 +427,18 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
     const proposalsList = proposals
       .map((p, i) => `#${i}: ${JSON.stringify(p)}`)
       .join("\n");
+    const reviewPayload =
+      config.mode === "compaction"
+        ? buildCompactionReviewPayload(proposals, memories)
+        : payload;
 
     broadcast("consolidation_phase", { runId, phase: "challenging" });
-    const adversaryPayload = `Proposals:\n${proposalsList}\n\nOriginal memories:\n${payload}`;
-    const adversaryCall = await runLlm(ADVERSARY_PROMPT, adversaryPayload, ADVERSARY_MODEL);
+    const adversaryPayload = `Proposals:\n${proposalsList}\n\nSource memories:\n${reviewPayload}`;
+    const adversaryCall = await runLlm(
+      config.adversaryPrompt,
+      adversaryPayload,
+      config.adversaryModel,
+    );
     await recordConsolidationUsage(
       "consolidation-adversary",
       runId,
@@ -289,10 +463,10 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
       })
       .join("\n");
 
-    const judgePayload = `Proposals:\n${proposalsList}\n\nAdversary challenges:\n${challengesBlock}\n\nOriginal memories:\n${payload}`;
+    const judgePayload = `Proposals:\n${proposalsList}\n\nAdversary challenges:\n${challengesBlock}\n\nSource memories:\n${reviewPayload}`;
 
     broadcast("consolidation_phase", { runId, phase: "judging" });
-    const judgeCall = await runLlm(JUDGE_PROMPT, judgePayload);
+    const judgeCall = await runLlm(config.judgePrompt, judgePayload);
     await recordConsolidationUsage(
       "consolidation-judge",
       runId,
@@ -379,6 +553,7 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
       mergedCount: merged,
       prunedCount: pruned,
       details: JSON.stringify({
+        mode: config.mode,
         memoriesScanned: memories.length,
         proposals,
         challenges,
@@ -401,6 +576,38 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
     broadcast("consolidation_failed", { runId, error: String(err) });
     throw err;
   }
+}
+
+export async function runConsolidation(trigger = "scheduled"): Promise<{
+  runId: string;
+  proposals: number;
+  merged: number;
+  pruned: number;
+}> {
+  return await runMemoryMaintenance(trigger, {
+    mode: "consolidation",
+    minimumMemories: 6,
+    proposerPrompt: PROPOSER_PROMPT,
+    adversaryPrompt: ADVERSARY_PROMPT,
+    judgePrompt: JUDGE_PROMPT,
+    adversaryModel: ADVERSARY_MODEL,
+  });
+}
+
+export async function runCompaction(trigger = "compact-manual"): Promise<{
+  runId: string;
+  proposals: number;
+  merged: number;
+  pruned: number;
+}> {
+  return await runMemoryMaintenance(trigger, {
+    mode: "compaction",
+    minimumMemories: 2,
+    proposerPrompt: COMPACTION_PROPOSER_PROMPT,
+    adversaryPrompt: COMPACTION_ADVERSARY_PROMPT,
+    judgePrompt: COMPACTION_JUDGE_PROMPT,
+    adversaryModel: ADVERSARY_MODEL,
+  });
 }
 
 export function startConsolidationLoop(intervalMs = 24 * 60 * 60 * 1000): () => void {

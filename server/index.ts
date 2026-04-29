@@ -4,7 +4,7 @@ import cors from "cors";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { addClient } from "./broadcast.js";
-import { createSendblueRouter } from "./sendblue.js";
+import { createTelegramRouter } from "./telegram.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -13,6 +13,7 @@ import { startHeartbeatLoop } from "./heartbeat.js";
 import { startConsolidationLoop } from "./consolidation.js";
 import { cancelAgent, retryAgent } from "./execution-agent.js";
 import { createComposioRouter } from "./composio-routes.js";
+import { adminTokenFromUpgrade, isAdminTokenValid, requireAdminToken } from "./http-auth.js";
 
 async function main() {
   await loadIntegrations();
@@ -29,7 +30,8 @@ async function main() {
     res.json({ ok: true, service: "boop-agent" });
   });
 
-  app.use("/sendblue", createSendblueRouter());
+  app.use("/telegram", createTelegramRouter());
+  app.use(requireAdminToken);
   app.use("/composio", createComposioRouter());
 
   app.post("/agents/:id/cancel", (req, res) => {
@@ -45,6 +47,19 @@ async function main() {
         console.error("[consolidation] manual run failed", err),
       );
       res.json({ ok: true, triggered: "manual" });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post("/compact", async (_req, res) => {
+    try {
+      const { runCompaction } = await import("./consolidation.js");
+      // Fire-and-forget so the HTTP request returns immediately.
+      runCompaction("compact-manual").catch((err) =>
+        console.error("[compaction] manual run failed", err),
+      );
+      res.json({ ok: true, triggered: "compact-manual" });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -76,7 +91,12 @@ async function main() {
   });
 
   const server = createServer(app);
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({
+    server,
+    path: "/ws",
+    verifyClient: (info: { req: Parameters<typeof adminTokenFromUpgrade>[0] }) =>
+      isAdminTokenValid(adminTokenFromUpgrade(info.req)),
+  });
   wss.on("connection", (ws) => {
     addClient(ws);
     ws.send(JSON.stringify({ event: "hello", data: { ok: true }, at: Date.now() }));
@@ -87,7 +107,7 @@ async function main() {
     console.log(`boop-agent server listening on :${port}`);
     console.log(`  health      GET  http://localhost:${port}/health`);
     console.log(`  chat        POST http://localhost:${port}/chat`);
-    console.log(`  sendblue    POST http://localhost:${port}/sendblue/webhook`);
+    console.log(`  telegram    POST http://localhost:${port}/telegram/webhook`);
     console.log(`  websocket   WS   ws://localhost:${port}/ws`);
   });
 }

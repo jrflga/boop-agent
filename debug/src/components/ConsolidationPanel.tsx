@@ -2,11 +2,16 @@ import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api.js";
 import { useSocket, type SocketEvent } from "../lib/useSocket.js";
+import { apiFetch } from "../lib/adminAuth.js";
+
+const MEMORY_ID_RE = /mem_[a-z0-9]+_[a-z0-9]+/gi;
 
 type Phase =
   | "loaded"
   | "proposing"
   | "proposed"
+  | "challenging"
+  | "challenged"
   | "judging"
   | "judged"
   | "applying"
@@ -44,6 +49,18 @@ const PHASE_CONFIG: Record<
     color: "text-emerald-400",
     label: "PROPOSALS",
   },
+  challenging: {
+    icon: "🛡️",
+    dot: "bg-fuchsia-400 live-dot",
+    color: "text-fuchsia-400",
+    label: "ADVERSARY THINKING",
+  },
+  challenged: {
+    icon: "🛡️",
+    dot: "bg-fuchsia-400",
+    color: "text-fuchsia-400",
+    label: "ADVERSARY",
+  },
   judging: {
     icon: "⚖️",
     dot: "bg-amber-400 live-dot",
@@ -75,6 +92,7 @@ export function ConsolidationPanel({ isDark }: { isDark: boolean }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [livePhases, setLivePhases] = useState<Record<string, LivePhase[]>>({});
   const [triggering, setTriggering] = useState(false);
+  const [compacting, setCompacting] = useState(false);
 
   useSocket((evt: SocketEvent) => {
     if (
@@ -105,9 +123,18 @@ export function ConsolidationPanel({ isDark }: { isDark: boolean }) {
   async function triggerManual() {
     setTriggering(true);
     try {
-      await fetch("/api/consolidate", { method: "POST" });
+      await apiFetch("/api/consolidate", { method: "POST" });
     } finally {
       setTimeout(() => setTriggering(false), 1500);
+    }
+  }
+
+  async function triggerCompaction() {
+    setCompacting(true);
+    try {
+      await apiFetch("/api/compact", { method: "POST" });
+    } finally {
+      setTimeout(() => setCompacting(false), 1500);
     }
   }
 
@@ -147,9 +174,20 @@ export function ConsolidationPanel({ isDark }: { isDark: boolean }) {
           {list.length} run{list.length === 1 ? "" : "s"}
         </span>
         <button
+          onClick={triggerCompaction}
+          disabled={compacting}
+          className={`ml-auto px-3 py-1.5 text-xs rounded-md transition disabled:opacity-50 ${
+            isDark
+              ? "bg-slate-800 hover:bg-slate-700 text-slate-200"
+              : "bg-slate-100 hover:bg-slate-200 text-slate-700"
+          }`}
+        >
+          {compacting ? "Compacting…" : "Compact now"}
+        </button>
+        <button
           onClick={triggerManual}
           disabled={triggering}
-          className="ml-auto px-3 py-1.5 text-xs rounded-md bg-sky-600 hover:bg-sky-500 text-white transition disabled:opacity-50"
+          className="px-3 py-1.5 text-xs rounded-md bg-sky-600 hover:bg-sky-500 text-white transition disabled:opacity-50"
         >
           {triggering ? "Running…" : "Run now"}
         </button>
@@ -512,6 +550,9 @@ function ReasoningSection({ run, isDark }: { run: any; isDark: boolean }) {
   } catch {
     /* invalid JSON */
   }
+  const memoryIds = collectMemoryIds(details);
+  const memoryRecords = useQuery(api.memoryRecords.getByMemoryIds, { memoryIds });
+  const memoryById = new Map((memoryRecords ?? []).map((m: any) => [m.memoryId, m]));
 
   if (!details || !details.proposals?.length) {
     return (
@@ -590,11 +631,12 @@ function ReasoningSection({ run, isDark }: { run: any; isDark: boolean }) {
                 {p.type === "merge" && (
                   <>
                     <div className={isDark ? "text-slate-300" : "text-slate-700"}>
-                      <span className={muted}>keep:</span> {p.keep}
+                      <span className={muted}>keep:</span>{" "}
+                      <MemoryIdBadge memoryId={p.keep} memory={memoryById.get(p.keep)} isDark={isDark} />
                     </div>
                     <div className={isDark ? "text-slate-300" : "text-slate-700"}>
                       <span className={muted}>absorb:</span>{" "}
-                      {(p.absorb ?? []).join(", ")}
+                      <MemoryIdList ids={p.absorb ?? []} memoryById={memoryById} isDark={isDark} />
                     </div>
                     {p.rewriteContent && (
                       <div
@@ -610,22 +652,25 @@ function ReasoningSection({ run, isDark }: { run: any; isDark: boolean }) {
                 {p.type === "supersede" && (
                   <>
                     <div className={isDark ? "text-slate-300" : "text-slate-700"}>
-                      <span className={muted}>newer:</span> {p.newer}
+                      <span className={muted}>newer:</span>{" "}
+                      <MemoryIdBadge memoryId={p.newer} memory={memoryById.get(p.newer)} isDark={isDark} />
                     </div>
                     <div className={isDark ? "text-slate-300" : "text-slate-700"}>
                       <span className={muted}>older:</span>{" "}
-                      {(p.older ?? []).join(", ")}
+                      <MemoryIdList ids={p.older ?? []} memoryById={memoryById} isDark={isDark} />
                     </div>
                   </>
                 )}
                 {p.type === "prune" && (
                   <>
                     <div className={isDark ? "text-slate-300" : "text-slate-700"}>
-                      <span className={muted}>memoryId:</span> {p.memoryId}
+                      <span className={muted}>memoryId:</span>{" "}
+                      <MemoryIdBadge memoryId={p.memoryId} memory={memoryById.get(p.memoryId)} isDark={isDark} />
                     </div>
                     {p.reason && (
                       <div className={isDark ? "text-slate-400" : "text-slate-600"}>
-                        <span className={muted}>reason:</span> {p.reason}
+                        <span className={muted}>reason:</span>{" "}
+                        <MemoryRichText text={p.reason} memoryById={memoryById} isDark={isDark} />
                       </div>
                     )}
                   </>
@@ -654,7 +699,7 @@ function ReasoningSection({ run, isDark }: { run: any; isDark: boolean }) {
                   >
                     JUDGE{" "}
                   </span>
-                  {d.rationale}
+                  <MemoryRichText text={d.rationale} memoryById={memoryById} isDark={isDark} />
                 </div>
               )}
             </div>
@@ -662,6 +707,150 @@ function ReasoningSection({ run, isDark }: { run: any; isDark: boolean }) {
         })}
       </div>
     </section>
+  );
+}
+
+function collectMemoryIds(details: any): string[] {
+  if (!details) return [];
+  const ids = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value === "string") {
+      for (const match of value.matchAll(MEMORY_ID_RE)) ids.add(match[0]);
+    } else if (Array.isArray(value)) {
+      for (const item of value) add(item);
+    }
+  };
+  for (const proposal of details.proposals ?? []) {
+    add(proposal.keep);
+    add(proposal.absorb);
+    add(proposal.newer);
+    add(proposal.older);
+    add(proposal.memoryId);
+    add(proposal.reason);
+    add(proposal.rewriteContent);
+  }
+  for (const decision of details.decisions ?? []) {
+    add(decision.rationale);
+  }
+  for (const applied of details.applied ?? []) {
+    add(applied.summary);
+  }
+  return [...ids];
+}
+
+function MemoryIdList({
+  ids,
+  memoryById,
+  isDark,
+}: {
+  ids: string[];
+  memoryById: Map<string, any>;
+  isDark: boolean;
+}) {
+  return (
+    <>
+      {ids.map((id, idx) => (
+        <span key={`${id}-${idx}`}>
+          {idx > 0 && ", "}
+          <MemoryIdBadge memoryId={id} memory={memoryById.get(id)} isDark={isDark} />
+        </span>
+      ))}
+    </>
+  );
+}
+
+function MemoryRichText({
+  text,
+  memoryById,
+  isDark,
+}: {
+  text: string;
+  memoryById: Map<string, any>;
+  isDark: boolean;
+}) {
+  const parts = text.split(MEMORY_ID_RE);
+  const ids = text.match(MEMORY_ID_RE) ?? [];
+  return (
+    <>
+      {parts.map((part, idx) => (
+        <span key={`${idx}-${part.slice(0, 8)}`}>
+          {part}
+          {ids[idx] && (
+            <MemoryIdBadge memoryId={ids[idx]} memory={memoryById.get(ids[idx])} isDark={isDark} />
+          )}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function MemoryIdBadge({
+  memoryId,
+  memory,
+  isDark,
+}: {
+  memoryId?: string;
+  memory?: any;
+  isDark: boolean;
+}) {
+  if (!memoryId) return null;
+  const muted = isDark ? "text-slate-500" : "text-slate-400";
+  const panel = isDark
+    ? "bg-slate-950 border-slate-700 text-slate-200 shadow-black/40"
+    : "bg-white border-slate-200 text-slate-800 shadow-slate-900/15";
+  const pill =
+    memory?.lifecycle === "active"
+      ? isDark
+        ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+        : "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : memory?.lifecycle === "archived"
+        ? isDark
+          ? "bg-amber-500/10 text-amber-300 border-amber-500/20"
+          : "bg-amber-50 text-amber-700 border-amber-200"
+        : isDark
+          ? "bg-rose-500/10 text-rose-300 border-rose-500/20"
+          : "bg-rose-50 text-rose-700 border-rose-200";
+
+  return (
+    <span className="relative inline-block group align-baseline">
+      <span
+        tabIndex={0}
+        className={`cursor-help rounded px-1 py-0.5 font-semibold underline decoration-dotted underline-offset-2 ${
+          isDark
+            ? "text-slate-200 hover:bg-slate-800"
+            : "text-slate-700 hover:bg-slate-100"
+        }`}
+      >
+        {memoryId}
+      </span>
+      <span
+        className={`pointer-events-none absolute left-0 top-full z-50 mt-1 hidden w-[24rem] whitespace-normal rounded-lg border p-3 text-left text-xs leading-relaxed shadow-xl group-hover:block group-focus-within:block ${panel}`}
+      >
+        <span className="mb-2 flex items-center gap-2">
+          <span className="font-semibold mono">{memoryId}</span>
+          {memory && (
+            <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${pill}`}>
+              {memory.lifecycle}
+            </span>
+          )}
+        </span>
+        {memory ? (
+          <>
+            <span className={`mb-2 block ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+              {memory.content}
+            </span>
+            <span className={`grid grid-cols-2 gap-x-3 gap-y-1 mono text-[10px] ${muted}`}>
+              <span>tier: {memory.tier}</span>
+              <span>segment: {memory.segment}</span>
+              <span>importance: {Number(memory.importance ?? 0).toFixed(2)}</span>
+              <span>accesses: {memory.accessCount ?? 0}</span>
+            </span>
+          </>
+        ) : (
+          <span className={muted}>Memory not found in current store.</span>
+        )}
+      </span>
+    </span>
   );
 }
 

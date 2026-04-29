@@ -26,6 +26,7 @@ export const CURATED_TOOLKITS: CuratedToolkit[] = [
   { slug: "googlesheets", displayName: "Google Sheets", authMode: "managed" },
   { slug: "googledocs", displayName: "Google Docs", authMode: "managed" },
   { slug: "slack", displayName: "Slack", authMode: "managed" },
+  { slug: "whatsapp", displayName: "WhatsApp Business", authMode: "managed" },
   { slug: "github", displayName: "GitHub", authMode: "managed" },
   { slug: "linear", displayName: "Linear", authMode: "managed" },
   { slug: "notion", displayName: "Notion", authMode: "managed" },
@@ -185,15 +186,33 @@ export async function listToolsForToolkit(slug: string): Promise<ToolSummary[]> 
   }
 }
 
+// `isEnabledForToolRouter` is a Composio-hosted-router feature flag — we use
+// the SDK directly, so an auth config is fully usable from Boop regardless of
+// that toggle. Only `status === "ENABLED"` matters.
 export async function listToolkitSlugsWithAuthConfig(): Promise<Set<string>> {
   const composio = getComposio();
   if (!composio) return new Set();
   try {
     const resp = await composio.authConfigs.list({ limit: 200 });
-    return new Set(resp.items.map((it) => it.toolkit.slug));
+    return new Set(
+      resp.items.filter((it) => it.status === "ENABLED").map((it) => it.toolkit.slug),
+    );
   } catch (err) {
     console.error("[composio] listToolkitSlugsWithAuthConfig failed", err);
     return new Set();
+  }
+}
+
+async function getAuthConfigIdForToolkit(slug: string): Promise<string | null> {
+  const composio = getComposio();
+  if (!composio) return null;
+  try {
+    const resp = await composio.authConfigs.list({ toolkit: slug, limit: 50 });
+    const usable = resp.items.find((it) => it.status === "ENABLED");
+    return usable?.id ?? null;
+  } catch (err) {
+    console.error(`[composio] getAuthConfigIdForToolkit(${slug}) failed`, err);
+    return null;
   }
 }
 
@@ -233,11 +252,15 @@ function genericProfileParse(d: Record<string, unknown>): Partial<AccountIdentit
   const name = first(
     d.name,
     d.login,
+    d.username,
     d.display_name,
     d.displayName,
     user.name,
+    user.username,
     viewer.name,
+    viewer.username,
     profile.name,
+    profile.username,
     team.name,
     d.companyName,
   );
@@ -245,9 +268,13 @@ function genericProfileParse(d: Record<string, unknown>): Partial<AccountIdentit
     d.avatar_url,
     d.avatarUrl,
     d.picture,
+    d.profile_image_url,
+    d.profileImageUrl,
     user.avatar_url,
+    user.profile_image_url,
     viewer.avatarUrl,
     profile.image,
+    profile.profile_image_url,
   );
   return { email, name, avatarUrl: avatar, label: email ?? name };
 }
@@ -271,6 +298,7 @@ const WHOAMI_BY_TOOLKIT: Record<string, WhoAmITool> = {
   hubspot: { tool: "HUBSPOT_GET_ACCOUNT_INFO", arguments: {}, parse: genericProfileParse },
   stripe: { tool: "STRIPE_GET_ACCOUNT", arguments: {}, parse: genericProfileParse },
   slack: { tool: "SLACK_FETCH_TEAM_INFO", arguments: {}, parse: genericProfileParse },
+  twitter: { tool: "TWITTER_USER_LOOKUP_ME", arguments: {}, parse: genericProfileParse },
 };
 
 async function fetchToolkitIdentity(
@@ -430,10 +458,18 @@ function extractAccountIdentity(state: unknown, data: unknown): AccountIdentity 
     str(s.domain) ??
     str(s.account_url) ??
     str(s.account_id) ??
+    str(s.generic_id) ??
+    str(s.waba_id) ??
+    str(s.phone_number_id) ??
+    str(s.phone_number) ??
     str(s.site_name) ??
     str(s.instanceName) ??
     str(d.shop) ??
-    str(d.subdomain);
+    str(d.subdomain) ??
+    str(d.generic_id) ??
+    str(d.waba_id) ??
+    str(d.phone_number_id) ??
+    str(d.phone_number);
 
   out.label = out.email ?? out.name ?? fallback;
   return out;

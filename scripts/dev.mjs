@@ -137,23 +137,23 @@ async function waitForNgrokUrl(timeoutMs = 15000) {
 
 function showBanner(url, stable) {
   const line = "═".repeat(68);
-  const webhook = `${url}/sendblue/webhook`;
+  const webhook = `${url}/telegram/webhook`;
   const dashboard = `http://localhost:5173`;
-  const from = envVars.SENDBLUE_FROM_NUMBER;
-  const fromLine = from
-    ? `  📱 Text this Sendblue number:  ${from}  (from a DIFFERENT phone)`
-    : `  ⚠ SENDBLUE_FROM_NUMBER is not set — outbound sends will fail.\n     Run: npm run sendblue:sync   (pulls it from the Sendblue CLI)`;
+  const allowed = envVars.TELEGRAM_ALLOWED_CHAT_IDS;
+  const allowedLine = allowed
+    ? `  🔐 Allowed Telegram IDs:       ${allowed}`
+    : `  ⚠ TELEGRAM_ALLOWED_CHAT_IDS is not set — inbound messages will be rejected.`;
 
   const headline = stable
     ? `your STABLE public URL is live.`
-    : `ngrok tunnel is live  (webhook auto-registered with Sendblue).`;
+    : `ngrok tunnel is live  (Telegram webhook auto-registered).`;
   const footer = stable
     ? ``
-    : `\n${C.dim}  ℹ The inbound webhook above was registered with Sendblue automatically.
-    Set SENDBLUE_AUTO_WEBHOOK=false in .env.local to disable, or pick a
+    : `\n${C.dim}  ℹ The inbound webhook above was registered with Telegram automatically.
+    Set TELEGRAM_AUTO_WEBHOOK=false in .env.local to disable, or pick a
     stable URL (ngrok paid / Cloudflare Tunnel) via \`npm run setup\`.${C.reset}\n`;
   const guide = stable
-    ? `\n  → First time? Sendblue dashboard → API Settings → Webhook\n    Configuration → add ${webhook} as INBOUND MESSAGE.\n`
+    ? `\n  → First time? Run: npm run telegram:webhook -- ${webhook}\n`
     : ``;
 
   console.log(`
@@ -162,8 +162,8 @@ ${C.banner}${line}
 
   🐶 Debug dashboard (click me):   ${dashboard}
   🌐 Public URL:                   ${url}
-  📮 Sendblue webhook (inbound):   ${webhook}
-${fromLine}${guide}
+  📮 Telegram webhook (inbound):   ${webhook}
+${allowedLine}${guide}
 ${line}${C.reset}${footer}`);
 }
 
@@ -179,7 +179,7 @@ ${C.dim}  Install:   brew install ngrok         (macOS)
   Auth:      ngrok config add-authtoken <token>
              (free token at https://dashboard.ngrok.com)
   Without ngrok you can still use the debug dashboard at http://localhost:5173
-  — iMessage replies via Sendblue won't work until your server is reachable.${C.reset}
+  — Telegram webhooks won't work until your server is reachable.${C.reset}
 `);
   }
 }
@@ -226,10 +226,10 @@ if (useNgrok && ngrokInstalled) {
 // Wait for all the core services to be ready before printing the banner,
 // so the URL isn't dangled in front of the user while Convex is still booting.
 async function autoRegisterWebhook(publicUrl) {
-  if (envVars.SENDBLUE_AUTO_WEBHOOK === "false") return;
-  const webhookUrl = `${publicUrl}/sendblue/webhook`;
+  if (envVars.TELEGRAM_AUTO_WEBHOOK === "false") return;
+  const webhookUrl = `${publicUrl}/telegram/webhook`;
   const prefix = `${C.ngrok}webhook${C.reset} │ `;
-  const child = spawn("node", ["scripts/sendblue-webhook.mjs", webhookUrl], {
+  const child = spawn("node", ["scripts/telegram-webhook.mjs", webhookUrl], {
     cwd: root,
     env: { ...process.env },
   });
@@ -256,7 +256,7 @@ Promise.all([
     if (useNgrok && ngrokInstalled) {
       if (ngrokUrl) {
         // Only auto-register for ephemeral ngrok URLs. Reserved domains and
-        // static URLs are already fixed in the Sendblue dashboard.
+        // static URLs are fixed and can be registered once.
         if (!ngrokDomain) {
           await autoRegisterWebhook(ngrokUrl);
         }
@@ -276,7 +276,7 @@ ${C.banner}${line}
 
   🐶 Debug dashboard:   http://localhost:5173
 
-  ⚠ No public tunnel configured. iMessage won't work until you expose
+  ⚠ No public tunnel configured. Telegram webhooks won't work until you expose
     the server. Use the Chat tab in the dashboard to test for now.
 ${line}${C.reset}
 `);
