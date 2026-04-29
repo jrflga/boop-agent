@@ -74,6 +74,8 @@ async function runAutomation(a: {
   schedule: string;
   conversationId?: string;
   notifyConversationId?: string;
+  notifyOnlyOnChange?: boolean;
+  lastSnapshot?: string;
 }): Promise<void> {
   const runId = randomId("run");
   await convex.mutation(api.automations.createRun, {
@@ -83,11 +85,16 @@ async function runAutomation(a: {
   broadcast("automation_started", { automationId: a.automationId, runId, name: a.name });
 
   try {
+    const taskBody = a.notifyOnlyOnChange
+      ? `${a.task}\n\nRetorne uma lista, um item por linha. Formato consistente, sem variação. Sem comentários, sem cabeçalho, sem rodapé.`
+      : a.task;
+
     const res = await spawnExecutionAgent({
-      task: `AUTOMATION "${a.name}": ${a.task}`,
+      task: `AUTOMATION "${a.name}": ${taskBody}`,
       integrations: a.integrations,
       conversationId: a.conversationId,
-      name: `auto:${a.name}`,
+      name: a.notifyOnlyOnChange ? `watcher:${a.name}` : `auto:${a.name}`,
+      modelOverride: a.notifyOnlyOnChange ? "claude-haiku-4-5-20251001" : undefined,
     });
     await convex.mutation(api.automations.updateRun, {
       runId,
@@ -96,17 +103,45 @@ async function runAutomation(a: {
       agentId: res.agentId,
     });
 
-    if (a.notifyConversationId && res.result) {
-      if (a.notifyConversationId.startsWith("telegram:")) {
-        const chatId = a.notifyConversationId.slice("telegram:".length);
-        const preamble = `[${a.name}]\n\n`;
-        await sendTelegramMessage(chatId, preamble + res.result);
+    if (res.status === "completed" && res.result) {
+      if (a.notifyOnlyOnChange) {
+        const SNAPSHOT_CAP = 16 * 1024;
+        const currLines = normalizeSnapshot(res.result);
+        const prevLines = a.lastSnapshot ? normalizeSnapshot(a.lastSnapshot) : [];
+        const baseline = a.lastSnapshot === undefined;
+        const additions = baseline ? [] : diffAdditions(prevLines, currLines);
+
+        // Always persist the new snapshot on a successful spawn (truncate to cap).
+        const newSnapshot = currLines.join("\n").slice(0, SNAPSHOT_CAP);
+        await convex.mutation(api.automations.updateSnapshot, {
+          automationId: a.automationId,
+          snapshot: newSnapshot,
+        });
+
+        if (!baseline && additions.length > 0 && a.notifyConversationId) {
+          const body = `[${a.name}]\n${additions.map((line) => `Novo: ${line}`).join("\n")}`;
+          if (a.notifyConversationId.startsWith("telegram:")) {
+            const chatId = a.notifyConversationId.slice("telegram:".length);
+            await sendTelegramMessage(chatId, body);
+          }
+          await convex.mutation(api.messages.send, {
+            conversationId: a.notifyConversationId,
+            role: "assistant",
+            content: body,
+          });
+        }
+      } else if (a.notifyConversationId) {
+        if (a.notifyConversationId.startsWith("telegram:")) {
+          const chatId = a.notifyConversationId.slice("telegram:".length);
+          const preamble = `[${a.name}]\n\n`;
+          await sendTelegramMessage(chatId, preamble + res.result);
+        }
+        await convex.mutation(api.messages.send, {
+          conversationId: a.notifyConversationId,
+          role: "assistant",
+          content: `[${a.name}]\n\n${res.result}`,
+        });
       }
-      await convex.mutation(api.messages.send, {
-        conversationId: a.notifyConversationId,
-        role: "assistant",
-        content: `[${a.name}]\n\n${res.result}`,
-      });
     }
 
     broadcast("automation_completed", { automationId: a.automationId, runId });
@@ -141,6 +176,8 @@ export async function tickAutomations(): Promise<void> {
       schedule: a.schedule,
       conversationId: a.conversationId,
       notifyConversationId: a.notifyConversationId,
+      notifyOnlyOnChange: a.notifyOnlyOnChange,
+      lastSnapshot: a.lastSnapshot,
     }).catch((err) => console.error("[automations] run error", err));
   }
 }
