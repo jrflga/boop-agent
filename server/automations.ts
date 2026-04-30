@@ -66,6 +66,23 @@ export function diffAdditions(prev: string[], curr: string[]): string[] {
   return additions;
 }
 
+// Extract the watcher list from a buffer that may also contain pre-list
+// narration / chain-of-thought / tool prose. The watcher prompt asks the
+// model to wrap its final list in `<<<LIST` ... `LIST>>>` markers; we take
+// the LAST occurrence so trailing thinking can't poison earlier markers.
+// Returns null if no marker pair is found — caller treats that as a failed
+// spawn (don't update snapshot, don't notify), which is exactly what we
+// want when Haiku ignores the directive.
+const LIST_OPEN = "<<<LIST";
+const LIST_CLOSE = "LIST>>>";
+export function extractListBlock(raw: string): string | null {
+  const closeIdx = raw.lastIndexOf(LIST_CLOSE);
+  if (closeIdx < 0) return null;
+  const openIdx = raw.lastIndexOf(LIST_OPEN, closeIdx);
+  if (openIdx < 0) return null;
+  return raw.slice(openIdx + LIST_OPEN.length, closeIdx);
+}
+
 async function runAutomation(a: {
   automationId: string;
   name: string;
@@ -86,7 +103,7 @@ async function runAutomation(a: {
 
   try {
     const taskBody = a.notifyOnlyOnChange
-      ? `${a.task}\n\nRetorne uma lista, um item por linha. Formato consistente, sem variação. Sem comentários, sem cabeçalho, sem rodapé.`
+      ? `${a.task}\n\nFORMATO DE SAÍDA — OBRIGATÓRIO:\nDepois de fazer o que precisar, termine sua resposta exatamente com este bloco:\n\n<<<LIST\n<linha 1>\n<linha 2>\n<linha 3>\nLIST>>>\n\nRegras:\n- Cada item é uma linha. Mesmo formato em todas as linhas (mesma capitalização, mesma pontuação, mesma ordem alfabética estável).\n- Não escreva nada depois de LIST>>>.\n- Não escreva nenhum item antes do <<<LIST.\n- Se não houver itens, deixe o bloco vazio:\n\n<<<LIST\nLIST>>>\n\n- O bloco deve ser literal. Sem markdown, sem code fences, sem aspas.\n- Não comente o resultado, não saudação, não explique. Antes do bloco você pode usar ferramentas, mas NÃO escreva narração nem "vou buscar" nem "agora vou".`
       : a.task;
 
     const res = await spawnExecutionAgent({
@@ -106,7 +123,23 @@ async function runAutomation(a: {
     if (res.status === "completed" && res.result) {
       if (a.notifyOnlyOnChange) {
         const SNAPSHOT_CAP = 16 * 1024;
-        const currLines = normalizeSnapshot(res.result);
+        const listBlock = extractListBlock(res.result);
+        if (listBlock === null) {
+          // Spawn produced no LIST sentinel block — treat as failed: don't
+          // update snapshot, don't notify, just log.
+          console.warn(
+            `[watcher ${a.automationId}] no LIST block in spawn output; skipping snapshot update`,
+          );
+          broadcast("automation_completed", { automationId: a.automationId, runId });
+          const next = nextRunFor(a.schedule);
+          await convex.mutation(api.automations.markRan, {
+            automationId: a.automationId,
+            lastRunAt: Date.now(),
+            nextRunAt: next ?? undefined,
+          });
+          return;
+        }
+        const currLines = normalizeSnapshot(listBlock);
         const prevLines = a.lastSnapshot ? normalizeSnapshot(a.lastSnapshot) : [];
         const baseline = a.lastSnapshot === undefined;
         const additions = baseline ? [] : diffAdditions(prevLines, currLines);
