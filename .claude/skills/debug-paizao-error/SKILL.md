@@ -125,13 +125,68 @@ code back into the SSH session manually. Painful but works.
 Create a key at https://console.anthropic.com/settings/keys then:
 
 ```bash
-ssh jardim-vps 'echo "ANTHROPIC_API_KEY=sk-ant-..." >> /opt/boop-agent/.env.local && pm2 restart paizao'
+ssh jardim-vps 'echo "ANTHROPIC_API_KEY=sk-ant-..." >> /opt/boop-agent/.env.local && pm2 restart /opt/boop-agent/ecosystem.config.cjs'
 ```
 
 The user is on Max5x — they will probably not want this unless option
 A is too painful. Confirm before running.
 
-After either fix, verify by sending a test message via `/chat`:
+### Claude CLI exits with `--dangerously-skip-permissions cannot be used with root/sudo privileges`
+
+If the SDK debug log (see "Capturing claude stderr" below) shows that
+exact message, paizao is running as `root` and the CLI refuses by
+design. paizao must run as a non-root user (we use `boop`), AND the
+spawn must have `HOME` pointed at that user's home so `claude` finds
+the credentials.
+
+The deploy is configured via `/opt/boop-agent/ecosystem.config.cjs`:
+
+```js
+module.exports = {
+  apps: [{
+    name: 'paizao',
+    cwd: '/opt/boop-agent',
+    script: '/usr/bin/bash',
+    args: ['-c', 'pnpm exec tsx server/index.ts'],
+    uid: 'boop',
+    gid: 'boop',
+    env: { HOME: '/home/boop' },
+    time: true,
+    out_file: '/var/log/paizao.out.log',
+    error_file: '/var/log/paizao.err.log',
+  }],
+};
+```
+
+**Gotchas (each cost a debug round when we built the deploy):**
+
+- `--uid boop` switches the spawned process's uid but **does NOT update
+  `HOME`**. Without `env: { HOME: '/home/boop' }` in the ecosystem,
+  the child inherits `HOME=/root` from the PM2 daemon shell, and
+  `claude` looks for credentials at `/root/.claude/` which (after
+  cleanup) does not exist.
+- **Never** prefix the start command with `HOME=/home/boop pm2 ...` to
+  set HOME for the daemon — PM2 reads HOME to find its own state dir,
+  so this **spawns a SECOND PM2 daemon** at `/home/boop/.pm2/` while
+  the original at `/root/.pm2/` keeps managing aluguel-aggregator. You
+  end up with two daemons and an orphan paizao only one of them can
+  see. Recovery: `HOME=/home/boop pm2 kill` to drop the boop daemon,
+  then re-start via the ecosystem file.
+- `pm2 restart paizao --update-env` re-reads env from the **calling
+  shell**, which silently overwrites `HOME=/home/boop` from the
+  ecosystem with `HOME=/root`. Always restart via the file:
+  `pm2 restart /opt/boop-agent/ecosystem.config.cjs`.
+
+Verification after a restart:
+
+```bash
+ssh jardim-vps 'PID=$(pm2 jlist | python3 -c "import sys,json; print([p[\"pid\"] for p in json.load(sys.stdin) if p[\"name\"]==\"paizao\"][0])"); sudo cat /proc/$PID/environ | tr "\0" "\n" | grep ^HOME='
+```
+
+Should print `HOME=/home/boop`. If `HOME=/root`, the next `/chat` call
+will fail.
+
+After either install path, verify by sending a test message via `/chat`:
 
 ```bash
 ssh jardim-vps 'curl -sS -X POST http://localhost:3456/chat \
@@ -144,6 +199,33 @@ ssh jardim-vps 'curl -sS -X POST http://localhost:3456/chat \
 and pipes it into curl on the VPS — the token never leaves the VPS, so
 it does not show up in the Claude Code transcript. Do not pull it back
 to local.)
+
+### Capturing claude stderr (when "exited with code 1" tells you nothing)
+
+The SDK throws away `claude`'s stderr unless you tell it not to. To
+turn it back on temporarily:
+
+```bash
+ssh jardim-vps "echo 'DEBUG_CLAUDE_AGENT_SDK=1' >> /opt/boop-agent/.env.local && pm2 restart /opt/boop-agent/ecosystem.config.cjs"
+```
+
+After triggering the failure once, the SDK writes a debug file at
+`/home/boop/.claude/debug/sdk-<uuid>.txt`. Read the latest one and
+filter out the noisy LSP/skills/cache lines:
+
+```bash
+ssh jardim-vps 'LATEST=$(ls -t /home/boop/.claude/debug 2>/dev/null | head -1); cat /home/boop/.claude/debug/$LATEST | grep -vE "\[DEBUG\] (Loading skills|Watching for|Found 0 plugins|LSP|installed_plugins|Stats cache|todos|Writing to temp|File /|Renaming /|Temp file)" | tail -60'
+```
+
+The actual claude error (e.g. "cannot be used with root/sudo") will be
+in that filtered output. Always remove `DEBUG_CLAUDE_AGENT_SDK` and
+restart via the ecosystem file when done — the debug logs include
+stdin payloads (system prompts, user messages) so they should not stay
+on disk:
+
+```bash
+ssh jardim-vps "sed -i '/^DEBUG_CLAUDE_AGENT_SDK=/d' /opt/boop-agent/.env.local && rm -rf /home/boop/.claude/debug && pm2 restart /opt/boop-agent/ecosystem.config.cjs"
+```
 
 ### Re-register Telegram webhook
 
