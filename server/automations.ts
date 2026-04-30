@@ -28,6 +28,61 @@ export function validateSchedule(schedule: string): { valid: boolean; error?: st
   }
 }
 
+// Normalize a raw spawn result into a clean line list:
+//   - trim leading/trailing whitespace per line
+//   - drop empty lines (after trimming)
+// Cases the caller relies on:
+//   - multi-line input with mixed whitespace and empty interleaved lines → all
+//     non-empty lines, trimmed, in original order
+//   - single-line input → one-element array
+//   - fully empty / whitespace-only input → empty array
+export function normalizeSnapshot(raw: string): string[] {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+// Pure set-difference: lines in `curr` that are not in `prev`.
+// Cases:
+//   - empty prev → returns all of curr (caller must skip notification on the
+//     baseline first tick by checking lastSnapshot === undefined, not by
+//     looking at the diff)
+//   - identical prev/curr → empty array
+//   - one new line → one-element array
+//   - complete replacement → all of curr
+//   - duplicate lines in curr (same line appears twice) → returned at most
+//     once (deduplicated against the prev set, then deduplicated against
+//     itself via the same membership test)
+export function diffAdditions(prev: string[], curr: string[]): string[] {
+  const prevSet = new Set(prev);
+  const seen = new Set<string>();
+  const additions: string[] = [];
+  for (const line of curr) {
+    if (prevSet.has(line) || seen.has(line)) continue;
+    additions.push(line);
+    seen.add(line);
+  }
+  return additions;
+}
+
+// Extract the watcher list from a buffer that may also contain pre-list
+// narration / chain-of-thought / tool prose. The watcher prompt asks the
+// model to wrap its final list in `<<<LIST` ... `LIST>>>` markers; we take
+// the LAST occurrence so trailing thinking can't poison earlier markers.
+// Returns null if no marker pair is found — caller treats that as a failed
+// spawn (don't update snapshot, don't notify), which is exactly what we
+// want when Haiku ignores the directive.
+const LIST_OPEN = "<<<LIST";
+const LIST_CLOSE = "LIST>>>";
+export function extractListBlock(raw: string): string | null {
+  const closeIdx = raw.lastIndexOf(LIST_CLOSE);
+  if (closeIdx < 0) return null;
+  const openIdx = raw.lastIndexOf(LIST_OPEN, closeIdx);
+  if (openIdx < 0) return null;
+  return raw.slice(openIdx + LIST_OPEN.length, closeIdx);
+}
+
 async function runAutomation(a: {
   automationId: string;
   name: string;
@@ -36,6 +91,8 @@ async function runAutomation(a: {
   schedule: string;
   conversationId?: string;
   notifyConversationId?: string;
+  notifyOnlyOnChange?: boolean;
+  lastSnapshot?: string;
 }): Promise<void> {
   const runId = randomId("run");
   await convex.mutation(api.automations.createRun, {
@@ -45,11 +102,16 @@ async function runAutomation(a: {
   broadcast("automation_started", { automationId: a.automationId, runId, name: a.name });
 
   try {
+    const taskBody = a.notifyOnlyOnChange
+      ? `${a.task}\n\nFORMATO DE SAÍDA — OBRIGATÓRIO:\nDepois de fazer o que precisar, termine sua resposta exatamente com este bloco:\n\n<<<LIST\n<linha 1>\n<linha 2>\n<linha 3>\nLIST>>>\n\nRegras:\n- Cada item é uma linha. Mesmo formato em todas as linhas (mesma capitalização, mesma pontuação, mesma ordem alfabética estável).\n- Não escreva nada depois de LIST>>>.\n- Não escreva nenhum item antes do <<<LIST.\n- Se não houver itens, deixe o bloco vazio:\n\n<<<LIST\nLIST>>>\n\n- O bloco deve ser literal. Sem markdown, sem code fences, sem aspas.\n- Não comente o resultado, não saudação, não explique. Antes do bloco você pode usar ferramentas, mas NÃO escreva narração nem "vou buscar" nem "agora vou".`
+      : a.task;
+
     const res = await spawnExecutionAgent({
-      task: `AUTOMATION "${a.name}": ${a.task}`,
+      task: `AUTOMATION "${a.name}": ${taskBody}`,
       integrations: a.integrations,
       conversationId: a.conversationId,
-      name: `auto:${a.name}`,
+      name: a.notifyOnlyOnChange ? `watcher:${a.name}` : `auto:${a.name}`,
+      modelOverride: a.notifyOnlyOnChange ? "claude-haiku-4-5-20251001" : undefined,
     });
     await convex.mutation(api.automations.updateRun, {
       runId,
@@ -58,17 +120,61 @@ async function runAutomation(a: {
       agentId: res.agentId,
     });
 
-    if (a.notifyConversationId && res.result) {
-      if (a.notifyConversationId.startsWith("telegram:")) {
-        const chatId = a.notifyConversationId.slice("telegram:".length);
-        const preamble = `[${a.name}]\n\n`;
-        await sendTelegramMessage(chatId, preamble + res.result);
+    if (res.status === "completed" && res.result) {
+      if (a.notifyOnlyOnChange) {
+        const SNAPSHOT_CAP = 16 * 1024;
+        const listBlock = extractListBlock(res.result);
+        if (listBlock === null) {
+          // Spawn produced no LIST sentinel block — treat as failed: don't
+          // update snapshot, don't notify, just log.
+          console.warn(
+            `[watcher ${a.automationId}] no LIST block in spawn output; skipping snapshot update`,
+          );
+          broadcast("automation_completed", { automationId: a.automationId, runId });
+          const next = nextRunFor(a.schedule);
+          await convex.mutation(api.automations.markRan, {
+            automationId: a.automationId,
+            lastRunAt: Date.now(),
+            nextRunAt: next ?? undefined,
+          });
+          return;
+        }
+        const currLines = normalizeSnapshot(listBlock);
+        const prevLines = a.lastSnapshot ? normalizeSnapshot(a.lastSnapshot) : [];
+        const baseline = a.lastSnapshot === undefined;
+        const additions = baseline ? [] : diffAdditions(prevLines, currLines);
+
+        // Always persist the new snapshot on a successful spawn (truncate to cap).
+        const newSnapshot = currLines.join("\n").slice(0, SNAPSHOT_CAP);
+        await convex.mutation(api.automations.updateSnapshot, {
+          automationId: a.automationId,
+          snapshot: newSnapshot,
+        });
+
+        if (!baseline && additions.length > 0 && a.notifyConversationId) {
+          const body = `[${a.name}]\n${additions.map((line) => `Novo: ${line}`).join("\n")}`;
+          if (a.notifyConversationId.startsWith("telegram:")) {
+            const chatId = a.notifyConversationId.slice("telegram:".length);
+            await sendTelegramMessage(chatId, body);
+          }
+          await convex.mutation(api.messages.send, {
+            conversationId: a.notifyConversationId,
+            role: "assistant",
+            content: body,
+          });
+        }
+      } else if (a.notifyConversationId) {
+        if (a.notifyConversationId.startsWith("telegram:")) {
+          const chatId = a.notifyConversationId.slice("telegram:".length);
+          const preamble = `[${a.name}]\n\n`;
+          await sendTelegramMessage(chatId, preamble + res.result);
+        }
+        await convex.mutation(api.messages.send, {
+          conversationId: a.notifyConversationId,
+          role: "assistant",
+          content: `[${a.name}]\n\n${res.result}`,
+        });
       }
-      await convex.mutation(api.messages.send, {
-        conversationId: a.notifyConversationId,
-        role: "assistant",
-        content: `[${a.name}]\n\n${res.result}`,
-      });
     }
 
     broadcast("automation_completed", { automationId: a.automationId, runId });
@@ -103,6 +209,8 @@ export async function tickAutomations(): Promise<void> {
       schedule: a.schedule,
       conversationId: a.conversationId,
       notifyConversationId: a.notifyConversationId,
+      notifyOnlyOnChange: a.notifyOnlyOnChange,
+      lastSnapshot: a.lastSnapshot,
     }).catch((err) => console.error("[automations] run error", err));
   }
 }

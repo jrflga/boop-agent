@@ -27,6 +27,9 @@ Cron expressions (5 fields: min hour day-of-month month day-of-week). Examples:
   "0 18 * * 0"     — Sundays at 6pm
 
 Use this for anything the user says "every [time]" or "remind me" about.
+Set notifyOnlyOnChange=true when the user wants a watcher: "me avisa quando
+ABRIR / quando MUDAR / quando APARECER / quando CHEGAR algo novo". The agent
+will only ping when the result differs from the previous run.
 Integrations available: ${integrationHint}`,
         {
           name: z.string().describe("Short label, e.g. 'morning email digest'."),
@@ -46,6 +49,13 @@ Integrations available: ${integrationHint}`,
             .optional()
             .default(true)
             .describe("If true, send the result to this conversation when it runs."),
+          notifyOnlyOnChange: z
+            .boolean()
+            .optional()
+            .default(false)
+            .describe(
+              "Watcher mode: only notify when the result is different from the previous run. First tick after creation is silent (baseline). Use for 'avisa quando abrir/mudar/aparecer'.",
+            ),
         },
         async (args) => {
           const validation = validateSchedule(args.schedule);
@@ -70,13 +80,15 @@ Integrations available: ${integrationHint}`,
             conversationId,
             notifyConversationId: args.notify ? conversationId : undefined,
             nextRunAt,
+            notifyOnlyOnChange: args.notifyOnlyOnChange,
           });
           const nextStr = nextRunAt ? new Date(nextRunAt).toLocaleString() : "unknown";
+          const kind = args.notifyOnlyOnChange ? "watcher" : "automation";
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Created automation ${automationId} "${args.name}" — next run: ${nextStr}.`,
+                text: `Created ${kind} ${automationId} "${args.name}" — next run: ${nextStr}.`,
               },
             ],
           };
@@ -95,10 +107,10 @@ Integrations available: ${integrationHint}`,
           if (mine.length === 0) {
             return { content: [{ type: "text" as const, text: "No automations." }] };
           }
-          const lines = mine.map(
-            (a) =>
-              `• [${a.automationId}] ${a.enabled ? "●" : "○"} "${a.name}" — ${a.schedule} — ${a.task}`,
-          );
+          const lines = mine.map((a) => {
+            const marker = a.notifyOnlyOnChange ? " (watcher)" : "";
+            return `• [${a.automationId}] ${a.enabled ? "●" : "○"}${marker} "${a.name}" — ${a.schedule} — ${a.task}`;
+          });
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         },
       ),
