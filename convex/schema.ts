@@ -231,13 +231,16 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 
-  // User-anchored TODOs and reminders. Slice 1 fields only — `due`, `items`,
-  // `nextNagAt` arrive in later slices (issues #10, #11, #12).
+  // User-anchored TODOs and reminders. `due` is an absolute ms timestamp;
+  // a `due` whose time component is exactly midnight in the host TZ is
+  // treated as date-only by the dispatcher. `items` and `nextNagAt` land
+  // in later slices (issues #11, #12).
   tasks: defineTable({
     taskId: v.string(),
     conversationId: v.string(),
     description: v.string(),
     status: v.union(v.literal("open"), v.literal("closed")),
+    due: v.optional(v.number()),
     createdAt: v.number(),
     closedAt: v.optional(v.number()),
   })
