@@ -230,4 +230,17 @@ export default defineSchema({
     value: v.string(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
+
+  // User-anchored TODOs and reminders. Slice 1 fields only — `due`, `items`,
+  // `nextNagAt` arrive in later slices (issues #10, #11, #12).
+  tasks: defineTable({
+    taskId: v.string(),
+    conversationId: v.string(),
+    description: v.string(),
+    status: v.union(v.literal("open"), v.literal("closed")),
+    createdAt: v.number(),
+    closedAt: v.optional(v.number()),
+  })
+    .index("by_task_id", ["taskId"])
+    .index("by_conversation_status", ["conversationId", "status"]),
 });

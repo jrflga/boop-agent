@@ -6,7 +6,10 @@ import { createMemoryMcp } from "./memory/tools.js";
 import { extractAndStore } from "./memory/extract.js";
 import { availableIntegrations, spawnExecutionAgent } from "./execution-agent.js";
 import { createAutomationMcp } from "./automation-tools.js";
+import { createTaskMcp } from "./task-tools.js";
 import { createDraftDecisionMcp } from "./draft-tools.js";
+import { createSelfMcp } from "./self-tools.js";
+import { getRuntimeModel } from "./runtime-config.js";
 import { broadcast } from "./broadcast.js";
 import { sendTelegramMessage } from "./telegram.js";
 import { aggregateUsageFromResult, EMPTY_USAGE, type UsageTotals } from "./usage.js";
@@ -30,7 +33,9 @@ Your only tools:
 - recall / write_memory (durable memory for this user)
 - spawn_agent (dispatches a sub-agent that CAN touch the world)
 - create_automation / list_automations / toggle_automation / delete_automation
+- create_task / list_tasks / mark_done (TODO list + reminders)
 - list_drafts / send_draft / reject_draft
+- get_config / set_model / list_integrations / search_composio_catalog / inspect_toolkit (self-inspection)
 
 You cannot answer factual questions from your own knowledge. Not allowed.
 You have NO browser, NO WebSearch, NO WebFetch, NO file access, NO APIs.
@@ -84,6 +89,15 @@ Automations:
 - Pick a cron expression (5 fields) and a specific task for the sub-agent.
 - If they ask "what have I set up" or want to change/cancel something, use list_automations / toggle_automation / delete_automation.
 
+Tasks (TODO list / reminders):
+- Triggers for create_task: "anota", "me lembra", "tenho que", "preciso", "registra", "não esquece de me lembrar".
+- 1-vs-N rule: if the user dumps several SEMANTICALLY INDEPENDENT items in one message ("ligar pro dentista, mandar email pro Pedro, comprar passagem"), call create_task ONCE PER ITEM. If the items are parts of one logical action ("anota: comprar pão, leite e ovos" — one shopping trip), call create_task ONCE with everything inline. In ambiguous cases, ask.
+- Reply format after creation: when N=1 → "✓ Anotei: <description>" inline. When N>1 → "✓ Anotei N:" then a bullet list with "• <description>" per task.
+- For listing ("lista", "quais minhas tarefas?", "o que tem aberto?"): call list_tasks. The tool returns numbered lines with "(id=...)" embedded. When relaying, OMIT the "(id=...)" parts — show only the number and description, e.g. "1. ligar pro dentista".
+- For closing ("feito a 1", "feito o do dentista", "esquece a 4", "remove a 4", "já liguei pro dentista", "concluí a 2"): resolve to a taskId by reading the most recent list_tasks output you have or by calling list_tasks first, then call mark_done with the resolved taskId. Done and dismiss/remove both map to mark_done in v1 — there is no separate dismiss state.
+- This is slice 1 — there are no due dates, no nag scheduler, no snooze, no edits. If the user asks for any of those, say it's coming soon.
+- DON'T preface tool calls with narration ("I'll create three tasks...", "Let me check the current list..."). Just call the tool and reply with the result, in Portuguese.
+
 Drafts:
 - Any external action (email, calendar event, Slack message) goes through the draft flow. Execution agents SAVE drafts rather than sending directly.
 - When the user confirms ("send it", "yes", "go ahead"), call list_drafts then send_draft with the matching integrations.
@@ -97,6 +111,16 @@ LinkedIn toolkit has no inbox/DM tools). If the user asks what you can do
 with a specific integration, spawn_agent against it — the sub-agent has
 COMPOSIO_SEARCH_TOOLS and will return the real tool list. Never describe
 integration capabilities from training-data knowledge of the product.
+
+Self-inspection (no spawn needed — answer instantly):
+- "What model are you running?" → get_config
+- "Use opus" / "switch to sonnet" / "make it faster" → set_model (takes effect next turn; this turn finishes on the current model)
+- "What integrations / accounts are connected?" / "Which Gmail account?" → list_integrations
+- "Is there a tool for X?" / "Can you connect to Y?" → search_composio_catalog
+- "Is Slack connected?" / "What tools does Notion expose?" → inspect_toolkit (set includeTools=true if they want the tool list)
+Use these tools when the user asks about Boop's own configuration, connected
+accounts, or whether a service is reachable. They're cheap and synchronous —
+no ack required.
 
 Available integrations for spawn_agent: {{INTEGRATIONS}}
 
@@ -127,7 +151,9 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
 
   const memoryServer = createMemoryMcp(opts.conversationId);
   const automationServer = createAutomationMcp(opts.conversationId);
+  const taskServer = createTaskMcp(opts.conversationId);
   const draftDecisionServer = createDraftDecisionMcp(opts.conversationId);
+  const selfServer = createSelfMcp();
 
   const ackServer = createSdkMcpServer({
     name: "boop-ack",
@@ -227,7 +253,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
   const log = (msg: string) => console.log(`[turn ${tag}] ${msg}`);
 
   const turnStart = Date.now();
-  const requestedModel = process.env.BOOP_MODEL ?? "claude-sonnet-4-6";
+  const requestedModel = await getRuntimeModel();
   let reply = "";
   let usage: UsageTotals = { ...EMPTY_USAGE };
   try {
@@ -235,13 +261,15 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
       prompt,
       options: {
         systemPrompt,
-        model: process.env.BOOP_MODEL ?? "claude-sonnet-4-6",
+        model: requestedModel,
         mcpServers: {
           "boop-memory": memoryServer,
           "boop-spawn": spawnServer,
           "boop-automations": automationServer,
+          "boop-tasks": taskServer,
           "boop-draft-decisions": draftDecisionServer,
           "boop-ack": ackServer,
+          "boop-self": selfServer,
         },
         allowedTools: [
           "mcp__boop-memory__write_memory",
@@ -251,10 +279,18 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
           "mcp__boop-automations__list_automations",
           "mcp__boop-automations__toggle_automation",
           "mcp__boop-automations__delete_automation",
+          "mcp__boop-tasks__create_task",
+          "mcp__boop-tasks__list_tasks",
+          "mcp__boop-tasks__mark_done",
           "mcp__boop-draft-decisions__list_drafts",
           "mcp__boop-draft-decisions__send_draft",
           "mcp__boop-draft-decisions__reject_draft",
           "mcp__boop-ack__send_ack",
+          "mcp__boop-self__get_config",
+          "mcp__boop-self__set_model",
+          "mcp__boop-self__list_integrations",
+          "mcp__boop-self__search_composio_catalog",
+          "mcp__boop-self__inspect_toolkit",
         ],
         // Belt-and-suspenders: even with bypassPermissions the SDK can leak
         // its built-ins if we only whitelist. Explicitly block them on the
