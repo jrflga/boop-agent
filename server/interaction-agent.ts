@@ -6,6 +6,7 @@ import { createMemoryMcp } from "./memory/tools.js";
 import { extractAndStore } from "./memory/extract.js";
 import { availableIntegrations, spawnExecutionAgent } from "./execution-agent.js";
 import { createAutomationMcp } from "./automation-tools.js";
+import { createTaskMcp } from "./task-tools.js";
 import { createDraftDecisionMcp } from "./draft-tools.js";
 import { createSelfMcp } from "./self-tools.js";
 import { getRuntimeModel } from "./runtime-config.js";
@@ -32,6 +33,7 @@ Your only tools:
 - recall / write_memory (durable memory for this user)
 - spawn_agent (dispatches a sub-agent that CAN touch the world)
 - create_automation / list_automations / toggle_automation / delete_automation
+- create_task / list_tasks / mark_done (TODO list + reminders)
 - list_drafts / send_draft / reject_draft
 - get_config / set_model / list_integrations / search_composio_catalog / inspect_toolkit (self-inspection)
 
@@ -87,6 +89,15 @@ Automations:
 - Pick a cron expression (5 fields) and a specific task for the sub-agent.
 - If they ask "what have I set up" or want to change/cancel something, use list_automations / toggle_automation / delete_automation.
 
+Tasks (TODO list / reminders):
+- Triggers for create_task: "anota", "me lembra", "tenho que", "preciso", "registra", "não esquece de me lembrar".
+- 1-vs-N rule: if the user dumps several SEMANTICALLY INDEPENDENT items in one message ("ligar pro dentista, mandar email pro Pedro, comprar passagem"), call create_task ONCE PER ITEM. If the items are parts of one logical action ("anota: comprar pão, leite e ovos" — one shopping trip), call create_task ONCE with everything inline. In ambiguous cases, ask.
+- Reply format after creation: when N=1 → "✓ Anotei: <description>" inline. When N>1 → "✓ Anotei N:" then a bullet list with "• <description>" per task.
+- For listing ("lista", "quais minhas tarefas?", "o que tem aberto?"): call list_tasks. The tool returns numbered lines with "(id=...)" embedded. When relaying, OMIT the "(id=...)" parts — show only the number and description, e.g. "1. ligar pro dentista".
+- For closing ("feito a 1", "feito o do dentista", "esquece a 4", "remove a 4", "já liguei pro dentista", "concluí a 2"): resolve to a taskId by reading the most recent list_tasks output you have or by calling list_tasks first, then call mark_done with the resolved taskId. Done and dismiss/remove both map to mark_done in v1 — there is no separate dismiss state.
+- This is slice 1 — there are no due dates, no nag scheduler, no snooze, no edits. If the user asks for any of those, say it's coming soon.
+- DON'T preface tool calls with narration ("I'll create three tasks...", "Let me check the current list..."). Just call the tool and reply with the result, in Portuguese.
+
 Drafts:
 - Any external action (email, calendar event, Slack message) goes through the draft flow. Execution agents SAVE drafts rather than sending directly.
 - When the user confirms ("send it", "yes", "go ahead"), call list_drafts then send_draft with the matching integrations.
@@ -140,6 +151,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
 
   const memoryServer = createMemoryMcp(opts.conversationId);
   const automationServer = createAutomationMcp(opts.conversationId);
+  const taskServer = createTaskMcp(opts.conversationId);
   const draftDecisionServer = createDraftDecisionMcp(opts.conversationId);
   const selfServer = createSelfMcp();
 
@@ -254,6 +266,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
           "boop-memory": memoryServer,
           "boop-spawn": spawnServer,
           "boop-automations": automationServer,
+          "boop-tasks": taskServer,
           "boop-draft-decisions": draftDecisionServer,
           "boop-ack": ackServer,
           "boop-self": selfServer,
@@ -266,6 +279,9 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
           "mcp__boop-automations__list_automations",
           "mcp__boop-automations__toggle_automation",
           "mcp__boop-automations__delete_automation",
+          "mcp__boop-tasks__create_task",
+          "mcp__boop-tasks__list_tasks",
+          "mcp__boop-tasks__mark_done",
           "mcp__boop-draft-decisions__list_drafts",
           "mcp__boop-draft-decisions__send_draft",
           "mcp__boop-draft-decisions__reject_draft",
