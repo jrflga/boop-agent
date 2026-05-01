@@ -92,7 +92,7 @@ jobs:
           sudo -u "$APP_USER" git fetch --prune origin
           sudo -u "$APP_USER" git reset --hard origin/main
           echo "[2/3] pnpm install --frozen-lockfile (as $APP_USER)"
-          sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && pnpm install --frozen-lockfile"
+          sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && CI=true pnpm install --frozen-lockfile"
           echo "[3/3] pm2 restart $PM2_PROCESS"
           pm2 restart "$PM2_PROCESS" --update-env
           pm2 save
