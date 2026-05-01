@@ -1,0 +1,99 @@
+name: Deploy
+
+# Triggers on every push to main (and manual dispatch). Two parallel
+# jobs:
+#   - convex: pushes Convex functions/schema (uses `CONVEX_DEPLOY_KEY`).
+#   - vps: SSHes the VPS as root, runs `git fetch + reset` and
+#          `pnpm install --frozen-lockfile` AS the app user (sudo -u),
+#          then `pm2 restart <process>` against root's PM2 daemon.
+#
+# Why split user contexts: the PM2 daemon on this VPS runs as root, but
+# the boop process is forked to run as user `boop`. Running install as
+# root would chown-poison node_modules and break later runs by the
+# unprivileged process. So we SSH as root, sudo -u the app user for
+# everything that touches the filesystem, and stay as root only for
+# the `pm2 restart` call.
+#
+# Required secrets:
+#   CONVEX_DEPLOY_KEY  Convex prod deploy key (Dashboard -> Settings -> Deploy Keys)
+#   SSH_DEPLOY_KEY     PEM-formatted private key authorized on root@VPS
+#   SSH_HOST           VPS hostname / IP
+#   SSH_PORT           (optional, defaults to 22)
+#   SSH_USER           (optional, defaults to "root")
+#
+# Optional repository variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   INSTALL_DIR   Path to the boop git checkout on the VPS (default: /opt/boop-agent)
+#   PM2_PROCESS   PM2 process name to restart (default: paizao)
+#   APP_USER      Unix user that owns INSTALL_DIR and runs the app (default: boop)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  convex:
+    name: Convex deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Convex deploy
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: pnpm exec convex deploy --yes
+
+  vps:
+    name: VPS deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
+
+      - name: Trust server host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy server over SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+          SSH_USER: ${{ secrets.SSH_USER || 'root' }}
+          INSTALL_DIR: ${{ vars.INSTALL_DIR || '/opt/boop-agent' }}
+          PM2_PROCESS: ${{ vars.PM2_PROCESS || 'paizao' }}
+          APP_USER: ${{ vars.APP_USER || 'boop' }}
+        run: |
+          ssh -o StrictHostKeyChecking=yes -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "INSTALL_DIR='$INSTALL_DIR' PM2_PROCESS='$PM2_PROCESS' APP_USER='$APP_USER' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$INSTALL_DIR"
+          echo "[1/3] git fetch + reset to origin/main (as $APP_USER)"
+          sudo -u "$APP_USER" git fetch --prune origin
+          sudo -u "$APP_USER" git reset --hard origin/main
+          echo "[2/3] pnpm install --frozen-lockfile (as $APP_USER)"
+          sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && pnpm install --frozen-lockfile"
+          echo "[3/3] pm2 restart $PM2_PROCESS"
+          pm2 restart "$PM2_PROCESS" --update-env
+          pm2 save
+          REMOTE
