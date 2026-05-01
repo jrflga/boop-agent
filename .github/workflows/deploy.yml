@@ -1,8 +1,20 @@
 name: Deploy
 
-# Pushes Convex functions whenever a commit lands on main.
-# Required repo secret: CONVEX_DEPLOY_KEY (generate one in the Convex
-# dashboard for the prod deployment, Settings -> Deploy Keys).
+# Triggers on every push to main (and manual dispatch). Two parallel
+# jobs:
+#   - convex: pushes Convex functions/schema (uses `CONVEX_DEPLOY_KEY`).
+#   - vps: SSHes to the VPS, pulls latest, npm install, restarts PM2.
+#
+# Required secrets:
+#   CONVEX_DEPLOY_KEY  Convex prod deploy key (Dashboard -> Settings -> Deploy Keys)
+#   SSH_DEPLOY_KEY     PEM-formatted private key authorized on the VPS
+#   SSH_HOST           VPS hostname / IP
+#   SSH_PORT           (optional, defaults to 22)
+#   SSH_USER           (optional, defaults to "boop")
+#
+# Optional repository variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   INSTALL_DIR   Path to the boop git checkout on the VPS (default: /home/boop/boop-agent)
+#   PM2_PROCESS   PM2 process name to restart (default: boop)
 
 on:
   push:
@@ -32,3 +44,41 @@ jobs:
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
         run: npx convex deploy --yes
+
+  vps:
+    name: VPS deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
+
+      - name: Trust server host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy server over SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+          SSH_USER: ${{ secrets.SSH_USER || 'boop' }}
+          INSTALL_DIR: ${{ vars.INSTALL_DIR || '/home/boop/boop-agent' }}
+          PM2_PROCESS: ${{ vars.PM2_PROCESS || 'boop' }}
+        run: |
+          ssh -o StrictHostKeyChecking=yes -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "INSTALL_DIR='$INSTALL_DIR' PM2_PROCESS='$PM2_PROCESS' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$INSTALL_DIR"
+          echo "[1/3] git fetch + reset to origin/main"
+          git fetch --prune origin
+          git reset --hard origin/main
+          echo "[2/3] npm ci"
+          npm ci --no-audit --no-fund
+          echo "[3/3] pm2 restart $PM2_PROCESS"
+          pm2 restart "$PM2_PROCESS" --update-env
+          pm2 save
+          REMOTE
