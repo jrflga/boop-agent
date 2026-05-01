@@ -31,18 +31,19 @@ async function main() {
   });
 
   app.use("/telegram", createTelegramRouter());
-  app.use(requireAdminToken);
-  app.use("/composio", createComposioRouter());
 
-  app.post("/agents/:id/cancel", (req, res) => {
+  const apiRouter = express.Router();
+  apiRouter.use(requireAdminToken);
+  apiRouter.use("/composio", createComposioRouter());
+
+  apiRouter.post("/agents/:id/cancel", (req, res) => {
     const ok = cancelAgent(req.params.id);
     res.json({ ok });
   });
 
-  app.post("/consolidate", async (_req, res) => {
+  apiRouter.post("/consolidate", async (_req, res) => {
     try {
       const { runConsolidation } = await import("./consolidation.js");
-      // Fire-and-forget so the HTTP request returns immediately.
       runConsolidation("manual").catch((err) =>
         console.error("[consolidation] manual run failed", err),
       );
@@ -52,10 +53,9 @@ async function main() {
     }
   });
 
-  app.post("/compact", async (_req, res) => {
+  apiRouter.post("/compact", async (_req, res) => {
     try {
       const { runCompaction } = await import("./consolidation.js");
-      // Fire-and-forget so the HTTP request returns immediately.
       runCompaction("compact-manual").catch((err) =>
         console.error("[compaction] manual run failed", err),
       );
@@ -65,7 +65,7 @@ async function main() {
     }
   });
 
-  app.post("/agents/:id/retry", async (req, res) => {
+  apiRouter.post("/agents/:id/retry", async (req, res) => {
     const result = await retryAgent(req.params.id);
     if (!result) {
       res.status(404).json({ error: "agent not found" });
@@ -75,7 +75,7 @@ async function main() {
   });
 
   // Chat endpoint for local testing and the debug dashboard
-  app.post("/chat", async (req, res) => {
+  apiRouter.post("/chat", async (req, res) => {
     const { conversationId, content } = req.body ?? {};
     if (!conversationId || !content) {
       res.status(400).json({ error: "conversationId and content required" });
@@ -89,6 +89,8 @@ async function main() {
       res.status(500).json({ error: String(err) });
     }
   });
+
+  app.use("/api", apiRouter);
 
   const server = createServer(app);
   const wss = new WebSocketServer({

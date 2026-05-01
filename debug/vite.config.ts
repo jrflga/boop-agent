@@ -20,7 +20,6 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/api": {
           target: `http://localhost:${port}`,
-          rewrite: (p) => p.replace(/^\/api/, ""),
           configure: (proxy) => {
             proxy.on("error", () => {
               /* ignore — server may be restarting */
