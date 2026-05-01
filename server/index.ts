@@ -44,6 +44,7 @@ async function main() {
   apiRouter.post("/consolidate", async (_req, res) => {
     try {
       const { runConsolidation } = await import("./consolidation.js");
+      // Fire-and-forget so the HTTP request returns immediately.
       runConsolidation("manual").catch((err) =>
         console.error("[consolidation] manual run failed", err),
       );
@@ -56,6 +57,7 @@ async function main() {
   apiRouter.post("/compact", async (_req, res) => {
     try {
       const { runCompaction } = await import("./consolidation.js");
+      // Fire-and-forget so the HTTP request returns immediately.
       runCompaction("compact-manual").catch((err) =>
         console.error("[compaction] manual run failed", err),
       );
@@ -108,7 +110,7 @@ async function main() {
   server.listen(port, () => {
     console.log(`boop-agent server listening on :${port}`);
     console.log(`  health      GET  http://localhost:${port}/health`);
-    console.log(`  chat        POST http://localhost:${port}/chat`);
+    console.log(`  chat        POST http://localhost:${port}/api/chat`);
     console.log(`  telegram    POST http://localhost:${port}/telegram/webhook`);
     console.log(`  websocket   WS   ws://localhost:${port}/ws`);
   });
