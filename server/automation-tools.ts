@@ -105,7 +105,7 @@ Integrations available: ${integrationHint}`,
           }
           const lines = mine.map(
             (a) =>
-              `• [${a.automationId}] ${a.enabled ? "●" : "○"} "${a.name}" — ${a.schedule} — ${a.task}`,
+              `• [${a.automationId}] ${a.enabled ? "●" : "○"} "${a.name}" — ${a.schedule} — ${a.task}${a.notifyOnlyOnChange === true ? " (watcher)" : ""}`,
           );
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         },
