@@ -4,9 +4,10 @@ Features sob consideração pro Boop. Cada uma deve passar por uma sessão de
 `/grill-me` antes de virar plano ou implementação. As seções são
 autocontidas: quem for grilar uma não precisa do resto do arquivo.
 
-Tiers refletem status, não interesse: o que tá com decisões fechadas, o que
-precisa de grill, o que tá bloqueado por pesquisa externa. Dentro de cada
-tier, a ordem reflete interesse manifestado.
+Tiers refletem status, não interesse: o que tá com decisões fechadas e o
+que ainda precisa de grill. Dentro de cada tier, a ordem reflete interesse
+manifestado. Quando aparecer item bloqueado por pesquisa externa, abre
+tier "Pesquisa pendente" no fim do arquivo.
 
 ---
 
@@ -524,51 +525,38 @@ Dois sabores possíveis:
 - Quando a inferência tá estável o suficiente pra "trancar" o horário.
 - Mostrar pro user quando o horário muda? Ou ajusta silencioso?
 
----
-
-## Pesquisa pendente (bloqueado por investigação externa)
-
 ### Banking BR (Open Finance / agregação)
 
 Integração com agregador bancário pra extrato, saldo, categorização de
-gastos, contexto financeiro nas conversas. Pesquisa pendente sobre
-viabilidade de custo e regulação.
+gastos, contexto financeiro nas conversas.
 
-**Pendência:** rodar a pesquisa abaixo (em qualquer agente com WebSearch)
-antes de qualquer decisão de implementação.
+**Pesquisa concluída** (2026-05-02): comparativo Pluggy / Belvo / Klavi /
+Iniciador direto em [`docs/research/banking-br.md`](docs/research/banking-br.md).
 
-```
-Compare as principais APIs brasileiras de Open Finance / agregação
-bancária pra um app pessoal de finanças (volume baixo, não comercial).
+**Síntese da pesquisa:**
+- Piso público de produção é R$ 2.500/mês (Pluggy Basic). Belvo, Klavi,
+  Pluggy Custom e Iniciador inteiros ficam atrás de "fale com vendas".
+- Pluggy é ITP regulada pelo BC (Resolução 80/2021) → integrar via Pluggy
+  significa **não** precisar de autorização Bacen própria.
+- Boop sendo single-user (só os dados do mantenedor) → DPO e CNPJ não são
+  obrigatórios. Isso muda no instante em que virar multi-user.
+- Refresh tokens Open Finance duram 60min total; consent pode ser
+  indeterminado desde abril/2024.
+- POC viável de graça: trial Pluggy de 14 dias ou Belvo Test (até 25 links
+  reais, US$ 0).
 
-1. Pricing: custo por conexão de conta, custo por transação puxada,
-   free tier, mensalidade mínima, modelo de cobrança.
-2. Cobertura: quais bancos PF tão suportados (Itaú, Bradesco, Santander,
-   Nubank, Inter, C6, BB, Caixa, corretoras como XP, Rico, BTG).
-3. Sandbox e onboarding: dá pra testar de graça? Precisa de CNPJ?
-   Homologação Bacen? Quanto tempo até produção?
-4. Tipos de dado expostos: extrato, saldo, cartão de crédito,
-   investimentos, Pix, boletos.
-5. OAuth flow: user redireciona pro banco e volta? Com que frequência
-   precisa re-consent? Token expira em quantos dias?
-6. SDK e docs: tem SDK JS/TS? Webhook pra novas transações? Qualidade
-   da documentação?
-
-Compare ao menos Pluggy, Belvo, Klavi, e a opção de ir via Iniciador
-direto (ou outro player que aparecer relevante).
-
-Termina a resposta com:
-- Recomendação pra projeto pessoal de baixo volume.
-- Estimativa de custo mensal pra 5-10 contas conectadas e ~1k
-  transações/mês.
-- Riscos regulatórios pra dev solo: precisa de DPO? CNPJ? autorização
-  Bacen ou só do agregador?
-
-Fontes obrigatórias com URL.
-```
-
-**Decisões abertas (depois da pesquisa):**
-- Vale o custo pro caso de uso pessoal?
-- Risco regulatório aceitável pra dev solo.
-- Se for, qual provider e qual integração mínima viável (extrato somente?
-  extrato + categorização?).
+**Decisões abertas:**
+- POC primeiro ou skip total? Recomendação da pesquisa: POC com
+  Pluggy/Belvo trial pra ver se os dados puxados realmente agregam valor
+  conversacional, antes de pensar em produção.
+- Se POC valer a pena: que dado puxa primeiro? Extrato + saldo é o ROI
+  mais óbvio (categorizar e responder "quanto gastei com Uber esse mês").
+  Investimentos/cartão são complemento.
+- Como surfacing isso no Boop: tool dedicada (`get_balance`, `list_recent_transactions`)
+  ou fica como contexto passivo no system prompt? Tool dedicada custa
+  menos token até virar comum.
+- Privacy posture: dados financeiros vão pra memory consolidation? Se sim,
+  consolidation pode escrever fatos como "user gastou X em Y" — vale o
+  trade-off de utilidade vs sensibilidade?
+- Quando re-avaliar produção: gatilhos (quero compartilhar com X, quero
+  vender, etc.) vs prazo fixo.
