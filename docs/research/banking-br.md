@@ -4,6 +4,28 @@
 - Contexto: agente conversacional pessoal (Boop), volume baixo (5-10 contas, ~1k transações/mês), uso não comercial.
 - Versão dos providers: snapshots das páginas públicas em maio/2026 (Pluggy, Belvo, Klavi, Iniciador). Pricing pago atrás de "fale com vendas" em todos os casos relevantes.
 
+## Update 2026-05-02 — Caminho viável para uso pessoal (Pluggy)
+
+A pesquisa original deixou em aberto o status do "Freemium" Pluggy de 2021. O caminho real, confirmado no [README oficial do `pluggyai/meu-pluggy`](https://github.com/pluggyai/meu-pluggy), é uma combinação de duas superfícies:
+
+1. **Meu Pluggy** (`https://meu.pluggy.ai`) — consumer app **grátis e sem prazo**. O end-user faz signup, conecta os bancos via Open Finance regulado, e gerencia consents. Pluggy mantém o backup das instituições conectadas mesmo após o user encerrar a conta no banco.
+2. **Pluggy Dashboard** (`https://dashboard.pluggy.ai`) — developer portal. Account dev começa com **15 dias de trial**, mas o README diz textualmente: *"Don't worry you will be able to pull information after expires anyway"*. Acesso à API via `client_id` + `client_secret` continua post-trial.
+3. **Connector custom**: dev configura sua app dashboard pra listar MeuPluggy como connector. OAuth uma vez por banco entre MeuPluggy ↔ Dev app, e a Pluggy faz proxy do connection com refresh **diário automático** — o dev não lida com refresh tokens de 60min direto, isso fica do lado MeuPluggy.
+
+**Implicações pra projeto pessoal/hobby (single-user):**
+- Custo monetário: **R$ 0** indefinido na prática.
+- Auth bespoke necessário: **mínimo**. SDK Node oficial ([`pluggyai/pluggy-node`](https://github.com/pluggyai/pluggy-node)) consome `client_id`/`client_secret` direto. OAuth do user com bancos é resolvido via UI do Meu Pluggy.
+- Limitações pós-trial: **não documentadas publicamente**. Pode ser rate limit, pode ser feature degradation. O README só promete "you will be able to pull information". Único jeito de saber é rodando.
+- Validação por terceiro: [Actual Budget](https://actualbudget.org/docs/advanced/bank-sync/pluggyai/) (open source budgeting app) usa exatamente esse flow pra usuários PF, doc oficial deles confirma o setup.
+
+**O que continua não-resolvido:**
+- Volume de chamadas/dia que o tier post-trial aguenta.
+- Se algum endpoint específico (ex.: webhook de transações em tempo real) fica trancado pós-trial.
+- Whether the same flow funciona pra quem não é só leitor (ex.: futuro Pix transactions).
+
+Conclusão: pra Boop hoje (single-user, hobby), Pluggy via Meu Pluggy + Dev Dashboard é o caminho real. Belvo Test continua sendo plano B se Pluggy post-trial revelar limites quebrados em uso real.
+
+
 ## Prompt original
 
 ```
