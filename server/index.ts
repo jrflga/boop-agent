@@ -35,12 +35,17 @@ async function main() {
   // Gmail trigger now. For ngrok-based dev, scripts/dev.mjs drives the same
   // function once the ngrok URL is known, so we skip when only the local
   // PORT default is available.
-  const stableUrl = process.env.PUBLIC_URL;
-  if (stableUrl && !stableUrl.includes("localhost")) {
-    ensureProactiveWatcher(stableUrl).catch((err) =>
-      console.error("[proactive] startup failed", err),
-    );
-  }
+  // Proactive Gmail watcher disabled in this fork: the dispatch path in
+  // proactive-email.ts still calls into Sendblue/iMessage, which we removed
+  // when migrating to Telegram. Re-enable after porting that dispatch to
+  // sendTelegramMessage.
+  void ensureProactiveWatcher;
+  // const stableUrl = process.env.PUBLIC_URL;
+  // if (stableUrl && !stableUrl.includes("localhost")) {
+  //   ensureProactiveWatcher(stableUrl).catch((err) =>
+  //     console.error("[proactive] startup failed", err),
+  //   );
+  // }
 
   const app = express();
   const __dirname = path.dirname(fileURLToPath(import.meta.url));

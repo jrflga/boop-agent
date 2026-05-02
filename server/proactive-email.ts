@@ -9,7 +9,15 @@ import { api } from "../convex/_generated/api.js";
 import { convex } from "./convex-client.js";
 import { aggregateUsageFromResult, EMPTY_USAGE, type UsageTotals } from "./usage.js";
 import { handleUserMessage } from "./interaction-agent.js";
-import { sendImessage } from "./sendblue.js";
+// Sendblue/iMessage was removed when this fork migrated to Telegram. The
+// proactive Gmail feature is currently disabled at startup (see
+// ensureProactiveWatcher call in server/index.ts) until it's ported. Local
+// stub keeps the module compiling; if it ever runs, it fails loudly.
+async function sendImessage(_phone: string, _text: string): Promise<void> {
+  throw new Error(
+    "proactive-email: iMessage path not ported to Telegram. Re-enable in server/index.ts after porting.",
+  );
+}
 import { ensureTrigger, getComposio, listConnectedToolkits } from "./composio.js";
 import { ensureWebhookSubscription } from "./composio-webhook.js";
 import { describeUserNow } from "./timezone-config.js";
