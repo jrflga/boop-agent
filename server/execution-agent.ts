@@ -89,6 +89,10 @@ export interface SpawnOptions {
   integrations: string[];
   conversationId?: string;
   name?: string;
+  /** Override the model used for this spawn. Defaults to the runtime model. */
+  model?: string;
+  /** Override the sampling temperature. Defaults to the model's own default. */
+  temperature?: number;
 }
 
 export interface SpawnResult {
@@ -146,13 +150,15 @@ export async function spawnExecutionAgent(opts: SpawnOptions): Promise<SpawnResu
   let status: "completed" | "failed" | "cancelled" = "completed";
   let errorMsg: string | undefined;
 
-  const requestedModel = await getRuntimeModel();
+  const runtimeModel = await getRuntimeModel();
+  const requestedModel = opts.model ?? runtimeModel;
   try {
     for await (const msg of query({
       prompt: opts.task,
       options: {
         systemPrompt: EXECUTION_SYSTEM,
         model: requestedModel,
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
         mcpServers,
         allowedTools,
         // Load .claude/skills/ so the model can invoke SKILL.md playbooks. Without

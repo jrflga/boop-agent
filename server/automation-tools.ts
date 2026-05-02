@@ -46,6 +46,13 @@ Integrations available: ${integrationHint}`,
             .optional()
             .default(true)
             .describe("If true, send the result to this conversation when it runs."),
+          notifyOnlyOnChange: z
+            .boolean()
+            .optional()
+            .default(false)
+            .describe(
+              "If true, run as a watcher: only notify when new items appear since the last tick. First run stores a baseline without notifying. Useful for monitoring lists (e.g. new emails, new events).",
+            ),
         },
         async (args) => {
           const validation = validateSchedule(args.schedule);
@@ -70,6 +77,7 @@ Integrations available: ${integrationHint}`,
             conversationId,
             notifyConversationId: args.notify ? conversationId : undefined,
             nextRunAt,
+            notifyOnlyOnChange: args.notifyOnlyOnChange,
           });
           const nextStr = nextRunAt ? new Date(nextRunAt).toLocaleString() : "unknown";
           return {
