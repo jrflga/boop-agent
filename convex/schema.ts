@@ -232,9 +232,8 @@ export default defineSchema({
   }).index("by_key", ["key"]),
 
   // User-anchored TODOs and reminders. `due` is an absolute ms timestamp;
-  // a `due` whose time component is exactly midnight in the host TZ is
-  // treated as date-only by the dispatcher. `items` and `nextNagAt` land
-  // in later slices (issues #11, #12).
+  // a date-only deadline is stored as midnight in the configured user
+  // timezone. `items` and `nextNagAt` land in later slices (issues #11, #12).
   tasks: defineTable({
     taskId: v.string(),
     conversationId: v.string(),
@@ -245,5 +244,6 @@ export default defineSchema({
     closedAt: v.optional(v.number()),
   })
     .index("by_task_id", ["taskId"])
-    .index("by_conversation_status", ["conversationId", "status"]),
+    .index("by_conversation_status", ["conversationId", "status"])
+    .index("by_conversation_status_due", ["conversationId", "status", "due"]),
 });

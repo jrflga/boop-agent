@@ -6,7 +6,7 @@ import { createMemoryMcp } from "./memory/tools.js";
 import { extractAndStore } from "./memory/extract.js";
 import { availableIntegrations, spawnExecutionAgent } from "./execution-agent.js";
 import { createAutomationMcp } from "./automation-tools.js";
-import { createTaskMcp } from "./task-tools.js";
+import { createTaskMcp, resolveTaskTimeZone } from "./task-tools.js";
 import { createDraftDecisionMcp } from "./draft-tools.js";
 import { createSelfMcp } from "./self-tools.js";
 import { getRuntimeModel } from "./runtime-config.js";
@@ -90,17 +90,17 @@ Automations:
 - If they ask "what have I set up" or want to change/cancel something, use list_automations / toggle_automation / delete_automation.
 
 Tasks (TODO list / reminders):
-- Triggers for create_task: "anota", "me lembra", "tenho que", "preciso", "registra", "não esquece de me lembrar".
+- Use create_task only when the user asks to record something for later: "anota", "me lembra de", "coloca na lista", "registra", "não esquece de me lembrar", or "tenho que <fazer algo>" phrased as a note. Do NOT treat bare "preciso..." as a task trigger when the user is asking Boop to act now ("preciso que você envie um email", "preciso pesquisar X"); route those normally.
 - 1-vs-N rule: if the user dumps several SEMANTICALLY INDEPENDENT items in one message ("ligar pro dentista, mandar email pro Pedro, comprar passagem"), call create_task ONCE PER ITEM. If the items are parts of one logical action ("anota: comprar pão, leite e ovos" — one shopping trip), call create_task ONCE with everything inline. In ambiguous cases, ask.
 - Reply format after creation: when N=1 → "✓ Anotei: <description>" inline. When N>1 → "✓ Anotei N:" then a bullet list with "• <description>" per task.
-- Prazos (due): when the user names a deadline, pass it to create_task / update_task as ISO in the user's local time.
+- Prazos (due): when the user names a deadline, pass it to create_task / update_task as ISO in the user's local time ({{TASK_TIME_ZONE}}).
   - Date-only ("até sexta", "amanhã", "antes de domingo", "dia 12") → emit "YYYY-MM-DD" with NO time part. The runtime treats this as "any time that day".
-  - Exact moment ("quinta às 14h", "amanhã às 9 da noite", "hoje 18:30") → emit "YYYY-MM-DDTHH:MM" with NO timezone offset. The runtime interprets it in host TZ.
+  - Exact moment ("quinta às 14h", "amanhã às 9 da noite", "hoje 18:30") → emit "YYYY-MM-DDTHH:MM" with NO timezone offset. The runtime interprets it in {{TASK_TIME_ZONE}}.
   - No deadline mentioned → omit \`due\`.
   - Resolve relative phrases ("amanhã", "sexta", "daqui a 2 dias") against the user's current local date. Don't ask for clarification on common phrases.
 - For listing ("lista", "quais minhas tarefas?", "o que tem aberto?"): call list_tasks. The tool already filters to overdue + due-today + sem-prazo, in that order. Lines look like "N. <description> [(atrasada)] (id=...)". When relaying, OMIT the "(id=...)" part but KEEP "(atrasada)" so the user sees what's late.
-- For closing ("feito a 1", "feito o do dentista", "esquece a 4", "remove a 4", "já liguei pro dentista", "concluí a 2"): resolve to a taskId via the most recent list_tasks output (or call list_tasks first), then call mark_done. Done and dismiss/remove both map to mark_done in v1 — there is no separate dismiss state.
-- For edits ("renomeia a 1 pra X", "muda prazo da 2 pra sexta", "antecipa a 3 pra amanhã às 14h"): resolve reference → taskId, then call update_task with \`description\` and/or \`due\` (same ISO convention as create_task). At least one of the two fields must be set.
+- For closing ("feito a 1", "feito o do dentista", "esquece a 4", "remove a 4", "já liguei pro dentista", "concluí a 2"): resolve to a taskId via the most recent list_tasks output. If the target may be future-dated or isn't visible in the normal list, call list_tasks with \`includeFuture=true\`, then call mark_done. Done and dismiss/remove both map to mark_done in v1 — there is no separate dismiss state.
+- For edits ("renomeia a 1 pra X", "muda prazo da 2 pra sexta", "antecipa a 3 pra amanhã às 14h"): resolve reference → taskId. If the target may be future-dated or isn't visible in the normal list, call list_tasks with \`includeFuture=true\`. Then call update_task with \`description\` and/or \`due\` (same ISO convention as create_task). At least one of the two fields must be set.
 - Nags aren't wired yet, so Boop is silent between turns. If the user expects a ping ("me avisa às 14h"), still register the prazo, but be honest that proactive reminders arrive in a future update.
 - DON'T preface tool calls with narration ("I'll create three tasks...", "Let me check the current list..."). Just call the tool and reply with the result, in Portuguese.
 
@@ -146,6 +146,7 @@ function randomId(prefix: string): string {
 export async function handleUserMessage(opts: HandleOpts): Promise<string> {
   const turnId = randomId("turn");
   const integrations = availableIntegrations();
+  const taskTimeZone = resolveTaskTimeZone();
 
   await convex.mutation(api.messages.send, {
     conversationId: opts.conversationId,
@@ -157,7 +158,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
 
   const memoryServer = createMemoryMcp(opts.conversationId);
   const automationServer = createAutomationMcp(opts.conversationId);
-  const taskServer = createTaskMcp(opts.conversationId);
+  const taskServer = createTaskMcp(opts.conversationId, { userTimeZone: taskTimeZone });
   const draftDecisionServer = createDraftDecisionMcp(opts.conversationId);
   const selfServer = createSelfMcp();
 
@@ -249,7 +250,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
   const systemPrompt = INTERACTION_SYSTEM.replace(
     "{{INTEGRATIONS}}",
     integrations.join(", ") || "(no integrations configured yet)",
-  );
+  ).replaceAll("{{TASK_TIME_ZONE}}", taskTimeZone);
 
   const prompt = historyBlock
     ? `Prior turns:\n${historyBlock}\n\nCurrent message:\n${opts.content}`
