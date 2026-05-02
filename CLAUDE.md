@@ -28,3 +28,17 @@ Process:
 2. Prefer not committing ad-hoc debug scripts at all — keep them in your shell history or a gitignored scratch dir.
 3. If you realize PII slipped in **before pushing**, amend or reset and re-commit cleanly.
 4. If it already pushed, see the recovery steps in [GitHub's sensitive data docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository) and rotate any exposed credentials.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `jrflga/boop-agent` (the fork remote). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical defaults — `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root (created lazily by `/grill-with-docs`). See `docs/agents/domain.md`.
