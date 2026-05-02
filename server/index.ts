@@ -16,6 +16,9 @@ import { startConsolidationLoop } from "./consolidation.js";
 import { cancelAgent, retryAgent } from "./execution-agent.js";
 import { createComposioRouter } from "./composio-routes.js";
 import { adminTokenFromUpgrade, isAdminTokenValid, requireAdminToken } from "./http-auth.js";
+import { ensureProactiveWatcher } from "./proactive-email.js";
+import { preloadLocalModel } from "./embeddings.js";
+import { createMemoryRouter } from "./memory-routes.js";
 
 async function main() {
   await loadIntegrations();
@@ -23,12 +26,32 @@ async function main() {
   startAutomationLoop();
   startHeartbeatLoop();
   startConsolidationLoop();
+  // No-op when a paid embedding key is set; otherwise downloads/loads the
+  // local BGE-large model in the background so the first user-facing
+  // recall() doesn't pay the model-load cost.
+  preloadLocalModel();
+
+  // If a stable public URL is configured, register the Composio webhook +
+  // Gmail trigger now. For ngrok-based dev, scripts/dev.mjs drives the same
+  // function once the ngrok URL is known, so we skip when only the local
+  // PORT default is available.
+  const stableUrl = process.env.PUBLIC_URL;
+  if (stableUrl && !stableUrl.includes("localhost")) {
+    ensureProactiveWatcher(stableUrl).catch((err) =>
+      console.error("[proactive] startup failed", err),
+    );
+  }
 
   const app = express();
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const dashboardDir = path.resolve(__dirname, "..", "debug", "dist");
 
   app.use(cors());
+  // Composio webhook receiver must read raw bytes for HMAC verification, so
+  // its body parser is mounted BEFORE the global express.json. Without this
+  // ordering the JSON parser consumes the stream first and the raw buffer
+  // arrives empty.
+  app.use("/composio/webhook", express.raw({ type: "application/json", limit: "2mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/health", (_req, res) => {
@@ -55,6 +78,7 @@ async function main() {
   const apiRouter = express.Router();
   apiRouter.use(requireAdminToken);
   apiRouter.use("/composio", createComposioRouter());
+  apiRouter.use("/memory", createMemoryRouter());
 
   apiRouter.post("/agents/:id/cancel", (req, res) => {
     const ok = cancelAgent(req.params.id);
