@@ -1,4 +1,6 @@
 import "./env-setup.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
@@ -23,6 +25,9 @@ async function main() {
   startConsolidationLoop();
 
   const app = express();
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const dashboardDir = path.resolve(__dirname, "..", "debug", "dist");
+
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
 
@@ -31,6 +36,21 @@ async function main() {
   });
 
   app.use("/telegram", createTelegramRouter());
+
+  // Dashboard (debug React app). Static assets are public; the API
+  // behind /api/* and the WebSocket are gated. The bundle has no
+  // secrets in it (only VITE_CONVEX_URL, public-by-design).
+  app.use(express.static(dashboardDir, { index: false, fallthrough: true }));
+  app.get(/^\/(?!api\/|auth\/|telegram\/|health$|ws$|login$).*/, (req, res, next) => {
+    if (!req.accepts("text/html")) {
+      next();
+      return;
+    }
+    const indexPath = path.join(dashboardDir, "index.html");
+    res.sendFile(indexPath, (err) => {
+      if (err) next(err);
+    });
+  });
 
   const apiRouter = express.Router();
   apiRouter.use(requireAdminToken);
