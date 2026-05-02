@@ -123,8 +123,12 @@ If conflicts:
   - Resolve only conflict markers.
   - Preserve intentional local customizations.
   - Incorporate upstream improvements.
+  - **Translate user-facing prompts to PT-BR.** This fork defaults to Portuguese (see commit "Make bot replies default to Portuguese"). Any English copy that reaches the user — model fallback messages, system-prompt directives the model echoes back, error/UI strings shown in chat — must be translated. Code comments and developer-facing logs stay in English.
   - Do not refactor surrounding code.
   - `git add <file>`
+- After all conflicts are staged, scan the auto-merged delta for fresh English user-facing strings the upstream introduced silently:
+  - `git diff --cached -- server/ | grep -iE '"[A-Z][a-z]+ .*[a-z]\."'` (heuristic — quoted English-looking sentences in server code).
+  - Translate any hits to PT-BR before committing. Same rule: user-visible only, not code comments.
 - When done: `git commit --no-edit` (if merge didn't auto-commit).
 
 # Step 4B: Selective (CHERRY-PICK)
