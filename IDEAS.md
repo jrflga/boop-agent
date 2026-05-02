@@ -148,6 +148,85 @@ sexta", "preciso ligar pro dentista amanhã") e cria uma task com `due` +
   o filtro por `source` é diff trivial quando virar dor).
 - Override de cadência por task (nudge custom, snooze, multiple re-nudges).
 
+### Banking BR (Open Finance via Pluggy)
+
+Integração com Pluggy pra extrato, saldo, categorização de gastos,
+contexto financeiro nas conversas. Pesquisa concluída em
+[`docs/research/banking-br.md`](docs/research/banking-br.md); decisões
+de arquitetura abaixo prontas pra plano.
+
+**Provider escolhido: Pluggy.** Caminho free-indefinido pra single-user
+(Meu Pluggy + Dashboard dev, post-trial pull continua funcionando).
+Belvo Test é plan B se Pluggy degradar. Outros (Klavi, Iniciador,
+Finansystech) só fazem sentido em cenário multi-user pago.
+
+**Decisões fechadas (pronto pra plano):**
+
+- **Privacy architecture**: combo de 3 camadas, design-by-default ao redor
+  do limite Anthropic API.
+  - **L1 — Agregação no tool.** Tools nunca retornam transação bruta pro
+    LLM. `get_balance` retorna `{ checking: 1234.56, savings: 5000.00 }`.
+    `get_spending_summary(period, group_by)` retorna `[{ category, total,
+    count }]`. Categorização acontece em código TypeScript/Convex,
+    usando o campo `category` que o Pluggy já entrega + override do user.
+  - **L3 — Approval-on-send pra detalhe.** Tool `get_transaction_detail`
+    força aprovação inline ("vou abrir os detalhes da transação X, ok?")
+    antes de retornar merchant/timestamp/amount exatos.
+  - **L4 — Skip + tool explícita pra memória.** `extractAndStore` pula
+    turnos flaggeados como financeiros. Padrões duráveis ("aluguel R$
+    2.5k dia 10", "salário cai entre dia 5 e dia 7") entram em
+    `memoryRecords` SÓ via tool dedicada `note_finance_pattern`, nunca
+    automático. Snapshots/amounts/transações nunca persistem.
+  - **L2 (redaction parcial) descartado.** Estado intermediário entre
+    agregado e detalhe completo confunde análise sem ganhar privacy real.
+
+- **Categorização**: começa com Pluggy default (campo `category` da API)
+  + tabela `categoryRules` no Convex pra override do user
+  (`{ merchantPattern, category }`). Aplicada server-side antes de
+  retornar pra LLM.
+
+- **Ferramental no debug dashboard** (não só chat): novo painel de
+  Banking que mostra
+  - lista de `categoryRules` (CRUD).
+  - merchants uncategorized do período (só `{merchant, count, total}`).
+  - botão `recategorize(period)` pra aplicar regras atuais em histórico.
+  - audit log das chamadas Pluggy (input/output, replay).
+  Mesmo padrão dos panels existentes (`MemoryPanel`, `ConsolidationPanel`).
+
+- **Escopo v1 de dados**: `accounts` + `transactions` (checking/savings).
+  Cobertura institucional mais consistente, ROI conversacional óbvio.
+  `credit_cards`, `investments` ficam pra v2 — mesmo SDK, mesmo padrão,
+  zero custo arquitetural pra adicionar depois.
+
+- **Tools v1 expostas ao agente principal**:
+  - `get_balance(account_filter?)` — só números agregados.
+  - `get_spending_summary(period, group_by)` — só agregados por categoria.
+  - `get_transaction_detail(date, amount)` — gated por approval inline.
+  - `set_category_rule(merchant_pattern, category)` — CRUD via chat.
+  - `note_finance_pattern(content)` — único caminho pra dado financeiro
+    entrar em `memoryRecords`.
+
+- **Direção futura anotada (memória)**: rotear pipeline de
+  `note_finance_pattern` por modelo local (Gemma 4 mencionado) em vez de
+  Anthropic API, defesa em profundidade. Implica manter o extract path
+  provider-agnostic desde o v1 — não bakar "Anthropic" no caminho de
+  extração financeira.
+
+**Sai do escopo do v1 (parking lot pro v2):**
+- Cartão de crédito, investimentos, loans (endpoints adicionais Pluggy).
+- Webhook real-time de transações novas (push do Pluggy → Boop).
+- Modelo local pra memória financeira (depende de "Modelo por tipo de
+  turn" landar primeiro, ou implementação dedicada).
+- Surfacing proativo (Boop avisar "gastou 30% a mais com restaurante esse
+  mês" sem ser perguntado).
+
+**Gatilhos pra revisita:**
+- Pluggy degrada o post-trial e quebra alguma feature crítica → migrar
+  pra Belvo Test ou re-avaliar.
+- Boop ganha 2nd user real → produção paga (R$ 2.5k/mês mín) ou rever
+  modelo de cobrança.
+- Player novo aparece com tier free explicit pra single-user.
+
 ---
 
 ## Quer fazer (precisa /grill-me primeiro)
@@ -524,39 +603,3 @@ Dois sabores possíveis:
 - Quanto histórico precisa pra convergir com confiança.
 - Quando a inferência tá estável o suficiente pra "trancar" o horário.
 - Mostrar pro user quando o horário muda? Ou ajusta silencioso?
-
-### Banking BR (Open Finance / agregação)
-
-Integração com agregador bancário pra extrato, saldo, categorização de
-gastos, contexto financeiro nas conversas.
-
-**Pesquisa concluída** (2026-05-02): comparativo Pluggy / Belvo / Klavi /
-Iniciador direto em [`docs/research/banking-br.md`](docs/research/banking-br.md).
-
-**Síntese da pesquisa:**
-- Piso público de produção é R$ 2.500/mês (Pluggy Basic). Belvo, Klavi,
-  Pluggy Custom e Iniciador inteiros ficam atrás de "fale com vendas".
-- Pluggy é ITP regulada pelo BC (Resolução 80/2021) → integrar via Pluggy
-  significa **não** precisar de autorização Bacen própria.
-- Boop sendo single-user (só os dados do mantenedor) → DPO e CNPJ não são
-  obrigatórios. Isso muda no instante em que virar multi-user.
-- Refresh tokens Open Finance duram 60min total; consent pode ser
-  indeterminado desde abril/2024.
-- POC viável de graça: trial Pluggy de 14 dias ou Belvo Test (até 25 links
-  reais, US$ 0).
-
-**Decisões abertas:**
-- POC primeiro ou skip total? Recomendação da pesquisa: POC com
-  Pluggy/Belvo trial pra ver se os dados puxados realmente agregam valor
-  conversacional, antes de pensar em produção.
-- Se POC valer a pena: que dado puxa primeiro? Extrato + saldo é o ROI
-  mais óbvio (categorizar e responder "quanto gastei com Uber esse mês").
-  Investimentos/cartão são complemento.
-- Como surfacing isso no Boop: tool dedicada (`get_balance`, `list_recent_transactions`)
-  ou fica como contexto passivo no system prompt? Tool dedicada custa
-  menos token até virar comum.
-- Privacy posture: dados financeiros vão pra memory consolidation? Se sim,
-  consolidation pode escrever fatos como "user gastou X em Y" — vale o
-  trade-off de utilidade vs sensibilidade?
-- Quando re-avaliar produção: gatilhos (quero compartilhar com X, quero
-  vender, etc.) vs prazo fixo.
