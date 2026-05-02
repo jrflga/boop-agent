@@ -4,11 +4,13 @@ Features sob consideração pro Boop. Cada uma deve passar por uma sessão de
 `/grill-me` antes de virar plano ou implementação. As seções são
 autocontidas: quem for grilar uma não precisa do resto do arquivo.
 
-Ordem reflete o interesse manifestado, não compromisso de roadmap.
+Tiers refletem status, não interesse: o que tá com decisões fechadas, o que
+precisa de grill, o que tá bloqueado por pesquisa externa. Dentro de cada
+tier, a ordem reflete interesse manifestado.
 
 ---
 
-## Priority A (alto interesse, baixo risco de virar besteira)
+## Pronto pra plano (decisões fechadas, aguardando issue + implementação)
 
 ### Watcher agents
 
@@ -50,30 +52,6 @@ específica, vaga publicada num site.
 - **MCP tools**: zero novos. `create_automation` ganha arg opcional
   `notifyOnlyOnChange`. List/toggle/delete inalterados.
 
-### Modelo por tipo de turn
-
-Roteia o turno pro modelo certo automaticamente. Chit-chat e self-inspection
-no Haiku, dispatch e coisa de memória no Sonnet, research pesado no Opus.
-Corta custo direto sem perder qualidade onde importa.
-
-**Componentes que já existem:**
-- `get_config` / `set_model` / `runtime-config.ts`.
-
-**Decisões abertas:**
-- Heurística de classificação. Opções: keyword/length-based no servidor (rápido
-  e barato), classifier-LLM pequeno antes do dispatch (mais preciso, mais
-  latência), ou deixar o próprio interaction agent decidir e re-spawn em
-  outro modelo (mais caro).
-- Override manual: user pode forçar um modelo por turno ("usa opus").
-- O sub-agent (`spawn_agent`) também pode escolher modelo dele baseado na
-  task, ou herda do interaction.
-- Como medir o impacto antes/depois (custo médio por turno, latência média,
-  taxa de "respondeu errado e teve que refazer").
-
----
-
-## Priority B (quer fazer, escopo curto)
-
 ### Imagens como input
 
 Aceitar foto/imagem do user e processar. Casos: recibo, screenshot de erro,
@@ -103,6 +81,95 @@ baixar, e passar como content block na chamada.
 - **Modelo**: usa o default do turno (Sonnet/Haiku têm vision). Quando
   "Modelo por tipo de turn" landar, presença de imagem vira sinal de
   roteamento (nunca rota pra modelo sem vision).
+
+### Nudges baseados em commitments
+
+Bot detecta promessas durante a conversa ("vou mandar email pra Maria até
+sexta", "preciso ligar pro dentista amanhã") e cria uma task com `due` +
+`nextNagAt`. Loop existente (`tickAutomations`, 30s) dispara nudges quando
+`nextNagAt <= now`.
+
+**Estado atual da base (já existe):**
+- Tabela `tasks` com `description`, `status`, `due`. Schema reservou
+  `nextNagAt` como "issue #12" no comentário do schema.
+- Tools MCP: `create_task`, `list_tasks`, `mark_done`, `update_task`. Prompt
+  do `create_task` já implementa "sem fishing" (só dispara com triggers
+  tipo "anota", "me lembra de", "tenho que").
+- Pipeline `extractAndStore` (fire-and-forget após cada turno) com prompt
+  JSON de extração e logging de custo.
+- Loop `tickAutomations` (30s) com pattern de envio Telegram + assistant
+  message.
+
+**Decisões fechadas (pronto pra plano):**
+- **Tabela**: estende `tasks`, sem tabela paralela. Adiciona campos
+  opcionais `source: "explicit" | "inferred"`, `nextNagAt: number`,
+  `lastNudgedAt: number`. Migração é aditiva, não-breaking; tasks legacy
+  ficam com `source=undefined` (display como `explicit`).
+- **Detecção implícita**: estende o `extractAndStore` existente. Output JSON
+  ganha array `tasks: [...]` em paralelo a `facts: [...]`. Custo marginal
+  ~zero (mesma chamada LLM, mesmo prompt cache). Consumer novo grava em
+  `tasks` via mutation interna `tasks.createInferred` com `source="inferred"`.
+  `create_task` user-facing continua só pra `explicit`.
+- **UX de criação**: silent insert. Sem followup ("anotei que..."). Se
+  errou, user dispensa via "esquece a N" no due day. **Premature design
+  flag**: revisitar quando tivermos taxa real de false positives — pode
+  pedir confirmação ou pending state se LLM for over-eager. Sinal pra
+  coletar: counter de `inferred` tasks que viram `closed` antes do nudge
+  disparar.
+- **Mecanismo de nudge**: `nextNagAt` por task, piggyback no
+  `tickAutomations` loop (30s). Query nova `tasks.listDueForNudge` filtra
+  `status=open AND nextNagAt <= now`. Pra cada match: dispara nudge,
+  recalcula `nextNagAt`, atualiza `lastNudgedAt`.
+- **Defaults de cadência** (todos em TZ do user via `BOOP_USER_TIME_ZONE`):
+  - `due` date-only ("até sexta"): nudge 9h do due day, re-nudge 18h
+    se ainda open.
+  - `due` datetime ("sexta 14h"): nudge 30min antes, re-nudge no horário
+    exato se ainda open.
+  - `due` undefined: nunca nuda. Aparece em `list_tasks` mas não bipa.
+  - Após o último nudge, fica "atrasada" silenciosa (já marcada em
+    `list_tasks` via `task-tools.ts:228`).
+- **Texto e canal do nudge**: hardcoded `Lembrete: {description}` (segunda
+  rodada do mesmo dia prefixa `Ainda aberto:`). Canal espelha
+  `runAutomation` em `automations.ts:62`: `sendTelegramMessage` +
+  `messages.send` como assistant message. Sem LLM rewrite no v1.
+- **Cancelamento implícito**: NÃO no v1. User precisa dizer "feito a N"
+  via `mark_done`. Aceita ruído de tasks que nudaram à toa. Revisitar pro
+  v2 com dados reais.
+- **Recorrência**: NÃO no v1. Workaround via automations
+  existentes: "todo domingo crie uma task pra ligar pra mãe" → automation
+  dispara → chama `create_task`. Documentar no README de tasks.
+
+**Sai do escopo do v1 (parking lot pro v2):**
+- Cancelamento implícito ("já mandei o email" → close automático).
+- Tool `reopen_task` (não precisa enquanto não houver close inferred).
+- Recorrência nativa em `tasks`.
+- Painel debug dedicado pra inferred tasks (debug app já enxerga `tasks`;
+  o filtro por `source` é diff trivial quando virar dor).
+- Override de cadência por task (nudge custom, snooze, multiple re-nudges).
+
+---
+
+## Quer fazer (precisa /grill-me primeiro)
+
+### Modelo por tipo de turn
+
+Roteia o turno pro modelo certo automaticamente. Chit-chat e self-inspection
+no Haiku, dispatch e coisa de memória no Sonnet, research pesado no Opus.
+Corta custo direto sem perder qualidade onde importa.
+
+**Componentes que já existem:**
+- `get_config` / `set_model` / `runtime-config.ts`.
+
+**Decisões abertas:**
+- Heurística de classificação. Opções: keyword/length-based no servidor (rápido
+  e barato), classifier-LLM pequeno antes do dispatch (mais preciso, mais
+  latência), ou deixar o próprio interaction agent decidir e re-spawn em
+  outro modelo (mais caro).
+- Override manual: user pode forçar um modelo por turno ("usa opus").
+- O sub-agent (`spawn_agent`) também pode escolher modelo dele baseado na
+  task, ou herda do interaction.
+- Como medir o impacto antes/depois (custo médio por turno, latência média,
+  taxa de "respondeu errado e teve que refazer").
 
 ### Precisão da transcrição de áudio
 
@@ -434,10 +501,6 @@ Decisões abertas (todas):
 - Conflito com tools existentes: o que se o nome colide com uma tool
   built-in.
 
----
-
-## Priority C (interesse, mas precisa de design ou pesquisa antes)
-
 ### Lembretes que aprendem horário
 
 Automation que infere horário ao invés de exigir cron fixo. Hoje você diz
@@ -461,70 +524,9 @@ Dois sabores possíveis:
 - Quando a inferência tá estável o suficiente pra "trancar" o horário.
 - Mostrar pro user quando o horário muda? Ou ajusta silencioso?
 
-### Nudges baseados em commitments
+---
 
-Bot detecta promessas durante a conversa ("vou mandar email pra Maria até
-sexta", "preciso ligar pro dentista amanhã") e cria uma task com `due` +
-`nextNagAt`. Loop existente (`tickAutomations`, 30s) dispara nudges quando
-`nextNagAt <= now`.
-
-**Estado atual da base (já existe):**
-- Tabela `tasks` com `description`, `status`, `due`. Schema reservou
-  `nextNagAt` como "issue #12" no comentário do schema.
-- Tools MCP: `create_task`, `list_tasks`, `mark_done`, `update_task`. Prompt
-  do `create_task` já implementa "sem fishing" (só dispara com triggers
-  tipo "anota", "me lembra de", "tenho que").
-- Pipeline `extractAndStore` (fire-and-forget após cada turno) com prompt
-  JSON de extração e logging de custo.
-- Loop `tickAutomations` (30s) com pattern de envio Telegram + assistant
-  message.
-
-**Decisões fechadas (pronto pra plano):**
-- **Tabela**: estende `tasks`, sem tabela paralela. Adiciona campos
-  opcionais `source: "explicit" | "inferred"`, `nextNagAt: number`,
-  `lastNudgedAt: number`. Migração é aditiva, não-breaking; tasks legacy
-  ficam com `source=undefined` (display como `explicit`).
-- **Detecção implícita**: estende o `extractAndStore` existente. Output JSON
-  ganha array `tasks: [...]` em paralelo a `facts: [...]`. Custo marginal
-  ~zero (mesma chamada LLM, mesmo prompt cache). Consumer novo grava em
-  `tasks` via mutation interna `tasks.createInferred` com `source="inferred"`.
-  `create_task` user-facing continua só pra `explicit`.
-- **UX de criação**: silent insert. Sem followup ("anotei que..."). Se
-  errou, user dispensa via "esquece a N" no due day. **Premature design
-  flag**: revisitar quando tivermos taxa real de false positives — pode
-  pedir confirmação ou pending state se LLM for over-eager. Sinal pra
-  coletar: counter de `inferred` tasks que viram `closed` antes do nudge
-  disparar.
-- **Mecanismo de nudge**: `nextNagAt` por task, piggyback no
-  `tickAutomations` loop (30s). Query nova `tasks.listDueForNudge` filtra
-  `status=open AND nextNagAt <= now`. Pra cada match: dispara nudge,
-  recalcula `nextNagAt`, atualiza `lastNudgedAt`.
-- **Defaults de cadência** (todos em TZ do user via `BOOP_USER_TIME_ZONE`):
-  - `due` date-only ("até sexta"): nudge 9h do due day, re-nudge 18h
-    se ainda open.
-  - `due` datetime ("sexta 14h"): nudge 30min antes, re-nudge no horário
-    exato se ainda open.
-  - `due` undefined: nunca nuda. Aparece em `list_tasks` mas não bipa.
-  - Após o último nudge, fica "atrasada" silenciosa (já marcada em
-    `list_tasks` via `task-tools.ts:228`).
-- **Texto e canal do nudge**: hardcoded `Lembrete: {description}` (segunda
-  rodada do mesmo dia prefixa `Ainda aberto:`). Canal espelha
-  `runAutomation` em `automations.ts:62`: `sendTelegramMessage` +
-  `messages.send` como assistant message. Sem LLM rewrite no v1.
-- **Cancelamento implícito**: NÃO no v1. User precisa dizer "feito a N"
-  via `mark_done`. Aceita ruído de tasks que nudaram à toa. Revisitar pro
-  v2 com dados reais.
-- **Recorrência**: NÃO no v1. Workaround via automations
-  existentes: "todo domingo crie uma task pra ligar pra mãe" → automation
-  dispara → chama `create_task`. Documentar no README de tasks.
-
-**Sai do escopo do v1 (parking lot pro v2):**
-- Cancelamento implícito ("já mandei o email" → close automático).
-- Tool `reopen_task` (não precisa enquanto não houver close inferred).
-- Recorrência nativa em `tasks`.
-- Painel debug dedicado pra inferred tasks (debug app já enxerga `tasks`;
-  o filtro por `source` é diff trivial quando virar dor).
-- Override de cadência por task (nudge custom, snooze, multiple re-nudges).
+## Pesquisa pendente (bloqueado por investigação externa)
 
 ### Banking BR (Open Finance / agregação)
 
