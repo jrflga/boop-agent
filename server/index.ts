@@ -19,8 +19,14 @@ import { adminTokenFromUpgrade, isAdminTokenValid, requireAdminToken } from "./h
 import { ensureProactiveWatcher } from "./proactive-email.js";
 import { preloadLocalModel } from "./embeddings.js";
 import { createMemoryRouter } from "./memory-routes.js";
+import { createFinanceRouter } from "./finance/routes.js";
+import { getFinanceDb } from "./finance/db.js";
 
 async function main() {
+  // Open SQLite + run any pending migrations on boot, so the first finance
+  // request doesn't pay the migrate cost and a missing/unwritable data dir
+  // surfaces immediately instead of inside a tool call.
+  getFinanceDb();
   await loadIntegrations();
   startCleanupLoop();
   startAutomationLoop();
@@ -84,6 +90,7 @@ async function main() {
   apiRouter.use(requireAdminToken);
   apiRouter.use("/composio", createComposioRouter());
   apiRouter.use("/memory", createMemoryRouter());
+  apiRouter.use("/finance", createFinanceRouter());
 
   apiRouter.post("/agents/:id/cancel", (req, res) => {
     const ok = cancelAgent(req.params.id);

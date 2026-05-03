@@ -78,9 +78,15 @@ const NOISE_TRIGGERS = [
 const STACK_LINE = /^\s+at\s/;
 
 function run(name, cmd, args, readyPattern) {
+  const env = { ...process.env, FORCE_COLOR: "1" };
+  if (name === "server") {
+    env.NODE_OPTIONS = [env.NODE_OPTIONS, "--experimental-sqlite"]
+      .filter(Boolean)
+      .join(" ");
+  }
   const child = spawn(cmd, args, {
     cwd: root,
-    env: { ...process.env, FORCE_COLOR: "1" },
+    env,
   });
   const prefix = `${C[name]}${name.padEnd(6)}${C.reset} │ `;
   let buf = "";
