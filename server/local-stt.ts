@@ -7,7 +7,12 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_GROQ_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
+const DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo";
+const GROQ_TRANSCRIPTIONS_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
+
+type SttProvider = "local" | "groq";
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -16,25 +21,30 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function rawProvider(): string {
+  return (process.env.STT_PROVIDER ?? "off").trim().toLowerCase();
+}
+
 export function audioTranscriptionEnabled(): boolean {
-  return (process.env.STT_PROVIDER ?? "off").trim().toLowerCase() === "local";
+  const p = rawProvider();
+  return p === "local" || p === "groq";
 }
 
 export function maxAudioBytes(): number {
   return envInt("TELEGRAM_AUDIO_MAX_BYTES", DEFAULT_MAX_BYTES);
 }
 
-function localWhisperConfig() {
-  const provider = (process.env.STT_PROVIDER ?? "off").trim().toLowerCase();
-  if (provider !== "local") {
-    throw new Error(`Unsupported STT_PROVIDER "${provider}". Supported values: local, off.`);
-  }
+function selectedProvider(): SttProvider {
+  const p = rawProvider();
+  if (p === "local" || p === "groq") return p;
+  throw new Error(`Unsupported STT_PROVIDER "${p}". Supported: local, groq, off.`);
+}
 
+function localWhisperConfig() {
   const model = process.env.WHISPER_MODEL?.trim();
   if (!model) {
     throw new Error("WHISPER_MODEL is required for local audio transcription.");
   }
-
   return {
     ffmpegBin: process.env.FFMPEG_BIN?.trim() || "ffmpeg",
     whisperBin: process.env.WHISPER_BIN?.trim() || "whisper-cli",
@@ -46,7 +56,22 @@ function localWhisperConfig() {
   };
 }
 
-export async function transcribeAudioFile(inputPath: string): Promise<string> {
+function groqConfig() {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("GROQ_API_KEY is required for Groq audio transcription.");
+  }
+  return {
+    apiKey,
+    model: process.env.GROQ_STT_MODEL?.trim() || DEFAULT_GROQ_MODEL,
+    // Groq accepts a single primary language hint in ISO-639-1. We reuse
+    // WHISPER_LANGUAGE so users who flip providers don't have to duplicate.
+    language: process.env.GROQ_STT_LANGUAGE?.trim() || process.env.WHISPER_LANGUAGE?.trim() || "pt",
+    timeoutMs: envInt("GROQ_STT_TIMEOUT_MS", DEFAULT_GROQ_TIMEOUT_MS),
+  };
+}
+
+async function transcribeWithLocalWhisper(inputPath: string): Promise<string> {
   const cfg = localWhisperConfig();
   const workDir = await mkdtemp(path.join(tmpdir(), "boop-stt-"));
   const wavPath = path.join(workDir, "audio.wav");
@@ -87,5 +112,53 @@ export async function transcribeAudioFile(inputPath: string): Promise<string> {
     return transcript;
   } finally {
     await rm(workDir, { recursive: true, force: true });
+  }
+}
+
+async function transcribeWithGroq(inputPath: string): Promise<string> {
+  const cfg = groqConfig();
+  const buf = await readFile(inputPath);
+  const filename = path.basename(inputPath) || "audio";
+
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(buf)]), filename);
+  form.append("model", cfg.model);
+  form.append("language", cfg.language);
+  form.append("response_format", "text");
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), cfg.timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(GROQ_TRANSCRIPTIONS_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.apiKey}` },
+      body: form,
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Groq STT failed: ${res.status} ${res.statusText} ${body.slice(0, 200)}`,
+    );
+  }
+
+  const transcript = (await res.text()).trim();
+  if (!transcript) {
+    throw new Error("Groq returned an empty transcript.");
+  }
+  return transcript;
+}
+
+export async function transcribeAudioFile(inputPath: string): Promise<string> {
+  switch (selectedProvider()) {
+    case "groq":
+      return transcribeWithGroq(inputPath);
+    case "local":
+      return transcribeWithLocalWhisper(inputPath);
   }
 }
