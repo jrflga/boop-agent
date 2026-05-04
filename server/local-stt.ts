@@ -118,7 +118,14 @@ async function transcribeWithLocalWhisper(inputPath: string): Promise<string> {
 async function transcribeWithGroq(inputPath: string): Promise<string> {
   const cfg = groqConfig();
   const buf = await readFile(inputPath);
-  const filename = path.basename(inputPath) || "audio";
+  // Groq's allowlist is flac/mp3/mp4/mpeg/mpga/m4a/ogg/opus/wav/webm and it
+  // sniffs the filename extension. Telegram saves voice messages as `.oga`
+  // (the Ogg container with Opus inside) which trips a 400 even though the
+  // bytes are valid. Normalize `.oga` -> `.ogg` for upload only.
+  const ext = path.extname(inputPath).toLowerCase();
+  const safeExt = ext === ".oga" ? ".ogg" : ext;
+  const base = path.basename(inputPath, ext);
+  const filename = (base || "audio") + (safeExt || ".ogg");
 
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(buf)]), filename);
