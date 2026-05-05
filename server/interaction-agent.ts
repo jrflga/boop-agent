@@ -10,6 +10,7 @@ import { createAutomationMcp } from "./automation-tools.js";
 import { createTaskMcp, resolveTaskTimeZone } from "./task-tools.js";
 import { createDraftDecisionMcp } from "./draft-tools.js";
 import { createSelfMcp } from "./self-tools.js";
+import { createFinanceMcp } from "./finance/mcp.js";
 import { getRuntimeModel } from "./runtime-config.js";
 import { broadcast } from "./broadcast.js";
 import { sendTelegramMessage } from "./telegram.js";
@@ -203,6 +204,17 @@ These are cheap and synchronous — no ack required. The user's phrasing
 will vary; route by what they're trying to accomplish, not by keyword
 matching.
 
+Banking (Pluggy-backed):
+When the user wants to know how much money they have, what their balance
+is, or how they're doing across accounts → get_balance. Default behavior
+returns the aggregate ({ checking, savings, credit_available, total } in
+BRL); pass item_alias only when the user is clearly asking about one
+specific bank. Cached data refreshes lazily once per day; if the user
+explicitly asks to update or refresh ("atualiza meus dados", "puxa o
+extrato novo") use refresh_pluggy_data instead. Privacy: never relay raw
+transaction lines, account numbers, or merchants — these tools return
+aggregates only, and that is the boundary you must keep.
+
 Time / timezone:
 The user has a saved timezone in get_config.userTimezone. Whenever your reply
 or a sub-agent's task depends on local time (deadlines, "today", "9am
@@ -254,6 +266,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
   const taskServer = createTaskMcp(opts.conversationId, { userTimeZone: taskTimeZone });
   const draftDecisionServer = createDraftDecisionMcp(opts.conversationId);
   const selfServer = createSelfMcp();
+  const financeServer = createFinanceMcp({ userTimeZone: taskTimeZone });
 
   const ackServer = createSdkMcpServer({
     name: "boop-ack",
@@ -375,6 +388,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
             "boop-draft-decisions": draftDecisionServer,
             "boop-ack": ackServer,
             "boop-self": selfServer,
+            "boop-finance": financeServer,
           },
           allowedTools: [
             "mcp__boop-memory__write_memory",
@@ -398,6 +412,8 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
             "mcp__boop-self__list_integrations",
             "mcp__boop-self__search_composio_catalog",
             "mcp__boop-self__inspect_toolkit",
+            "mcp__boop-finance__get_balance",
+            "mcp__boop-finance__refresh_pluggy_data",
           ],
           // Belt-and-suspenders: even with bypassPermissions the SDK can leak
           // its built-ins if we only whitelist. Explicitly block them on the
