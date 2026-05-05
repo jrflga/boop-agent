@@ -44,8 +44,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -92,7 +90,8 @@ jobs:
           sudo -u "$APP_USER" git fetch --prune origin
           sudo -u "$APP_USER" git reset --hard origin/main
           echo "[2/3] pnpm install --frozen-lockfile (as $APP_USER)"
-          sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && CI=true pnpm install --frozen-lockfile"
+          corepack enable
+          sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && CI=true corepack pnpm install --frozen-lockfile"
           echo "[3/3] pm2 restart $PM2_PROCESS"
           # Override HOME/USER/LOGNAME so pm2 --update-env stamps the
           # spawned process with the app user's identity instead of
