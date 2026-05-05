@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { queryWithRetry } from "../agent-query.js";
 import { api } from "../../convex/_generated/api.js";
 import { convex } from "../convex-client.js";
 import { embed } from "../embeddings.js";
@@ -49,14 +49,17 @@ export async function extractAndStore(opts: {
     const payload = `USER: ${opts.userMessage}\n\nASSISTANT: ${opts.assistantReply}`;
     let buffer = "";
     let usage: UsageTotals = { ...EMPTY_USAGE };
-    for await (const msg of query({
-      prompt: payload,
-      options: {
-        systemPrompt: EXTRACTION_PROMPT,
-        model: requestedModel,
-        permissionMode: "bypassPermissions",
+    for await (const msg of queryWithRetry(
+      {
+        prompt: payload,
+        options: {
+          systemPrompt: EXTRACTION_PROMPT,
+          model: requestedModel,
+          permissionMode: "bypassPermissions",
+        },
       },
-    })) {
+      { label: "memory.extract" },
+    )) {
       if (msg.type === "assistant") {
         for (const block of msg.message.content) {
           if (block.type === "text") buffer += block.text;

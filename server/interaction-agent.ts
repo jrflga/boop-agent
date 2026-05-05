@@ -1,4 +1,5 @@
-import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { queryWithRetry } from "./agent-query.js";
 import { z } from "zod";
 import { api } from "../convex/_generated/api.js";
 import { convex } from "./convex-client.js";
@@ -130,6 +131,36 @@ Tasks (TODO list / reminders):
 - For edits ("renomeia a 1 pra X", "muda prazo da 2 pra sexta", "antecipa a 3 pra amanhã às 14h"): resolve reference → taskId. If the target may be future-dated or isn't visible in the normal list, call list_tasks with \`includeFuture=true\`. Then call update_task with \`description\` and/or \`due\` (same ISO convention as create_task). At least one of the two fields must be set.
 - Nags aren't wired yet, so Boop is silent between turns. If the user expects a ping ("me avisa às 14h"), still register the prazo, but be honest that proactive reminders arrive in a future update.
 - DON'T preface tool calls with narration ("I'll create three tasks...", "Let me check the current list..."). Just call the tool and reply with the result, in Portuguese.
+
+Watchers (automations com notifyOnlyOnChange: true):
+Um "watcher" e uma automacao que roda em loop mas so te avisa quando
+algo MUDAR (util para monitorar precos, vagas, status de sites, etc.).
+
+Frases que indicam pedido de watcher (e equivalentes):
+"me avisa quando mudar", "me avisa quando abrir", "me avisa quando
+aparecer", "me avisa quando chegar", "monitora", "fica de olho",
+"avisa se mudar", "me manda quando tiver", "quando sair", "me alerta
+se aparecer", qualquer combinacao de "me avisa" + condicao futura.
+
+Protocolo OBRIGATORIO (nunca pule):
+1. Primeira mensagem: NAO chame create_automation. Proponha o watcher
+   em texto simples, em portugues, no formato:
+   "vou criar um watcher pra <o que monitorar> a cada <intervalo>,
+   te aviso quando <condicao>. ok?"
+   Seja especifico: inclua o que sera monitorado, o intervalo de
+   checagem proposto e a condicao que dispara o aviso.
+2. Aguarde confirmacao do usuario ("ok", "pode", "sim", "isso", etc.).
+3. Confirmado: chame create_automation com notifyOnlyOnChange: true
+   e os parametros combinados. Somente neste momento.
+4. Se o usuario corrigir o spec ("muda pra a cada 1 hora", "monitora
+   X nao Y"): reformule a proposta (passo 1) antes de chamar a tool.
+
+Formato final da chamada confirmada:
+create_automation({
+  cron: "<5-field cron expression>",
+  task: "<descricao concreta do que checar>",
+  notifyOnlyOnChange: true
+})
 
 Drafts:
 External actions (email, calendar event, Slack message, etc.) go through a
@@ -330,61 +361,64 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
   let reply = "";
   let usage: UsageTotals = { ...EMPTY_USAGE };
   try {
-    for await (const msg of query({
-      prompt,
-      options: {
-        systemPrompt,
-        model: requestedModel,
-        mcpServers: {
-          "boop-memory": memoryServer,
-          "boop-spawn": spawnServer,
-          "boop-automations": automationServer,
-          "boop-tasks": taskServer,
-          "boop-draft-decisions": draftDecisionServer,
-          "boop-ack": ackServer,
-          "boop-self": selfServer,
+    for await (const msg of queryWithRetry(
+      {
+        prompt,
+        options: {
+          systemPrompt,
+          model: requestedModel,
+          mcpServers: {
+            "boop-memory": memoryServer,
+            "boop-spawn": spawnServer,
+            "boop-automations": automationServer,
+            "boop-tasks": taskServer,
+            "boop-draft-decisions": draftDecisionServer,
+            "boop-ack": ackServer,
+            "boop-self": selfServer,
+          },
+          allowedTools: [
+            "mcp__boop-memory__write_memory",
+            "mcp__boop-memory__recall",
+            "mcp__boop-spawn__spawn_agent",
+            "mcp__boop-automations__create_automation",
+            "mcp__boop-automations__list_automations",
+            "mcp__boop-automations__toggle_automation",
+            "mcp__boop-automations__delete_automation",
+            "mcp__boop-tasks__create_task",
+            "mcp__boop-tasks__list_tasks",
+            "mcp__boop-tasks__mark_done",
+            "mcp__boop-tasks__update_task",
+            "mcp__boop-draft-decisions__list_drafts",
+            "mcp__boop-draft-decisions__send_draft",
+            "mcp__boop-draft-decisions__reject_draft",
+            "mcp__boop-ack__send_ack",
+            "mcp__boop-self__get_config",
+            "mcp__boop-self__set_model",
+            "mcp__boop-self__set_timezone",
+            "mcp__boop-self__list_integrations",
+            "mcp__boop-self__search_composio_catalog",
+            "mcp__boop-self__inspect_toolkit",
+          ],
+          // Belt-and-suspenders: even with bypassPermissions the SDK can leak
+          // its built-ins if we only whitelist. Explicitly block them on the
+          // dispatcher so it MUST spawn a sub-agent for external work.
+          disallowedTools: [
+            "WebSearch",
+            "WebFetch",
+            "Bash",
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Agent",
+            "Skill",
+          ],
+          permissionMode: "bypassPermissions",
         },
-        allowedTools: [
-          "mcp__boop-memory__write_memory",
-          "mcp__boop-memory__recall",
-          "mcp__boop-spawn__spawn_agent",
-          "mcp__boop-automations__create_automation",
-          "mcp__boop-automations__list_automations",
-          "mcp__boop-automations__toggle_automation",
-          "mcp__boop-automations__delete_automation",
-          "mcp__boop-tasks__create_task",
-          "mcp__boop-tasks__list_tasks",
-          "mcp__boop-tasks__mark_done",
-          "mcp__boop-tasks__update_task",
-          "mcp__boop-draft-decisions__list_drafts",
-          "mcp__boop-draft-decisions__send_draft",
-          "mcp__boop-draft-decisions__reject_draft",
-          "mcp__boop-ack__send_ack",
-          "mcp__boop-self__get_config",
-          "mcp__boop-self__set_model",
-          "mcp__boop-self__set_timezone",
-          "mcp__boop-self__list_integrations",
-          "mcp__boop-self__search_composio_catalog",
-          "mcp__boop-self__inspect_toolkit",
-        ],
-        // Belt-and-suspenders: even with bypassPermissions the SDK can leak
-        // its built-ins if we only whitelist. Explicitly block them on the
-        // dispatcher so it MUST spawn a sub-agent for external work.
-        disallowedTools: [
-          "WebSearch",
-          "WebFetch",
-          "Bash",
-          "Read",
-          "Write",
-          "Edit",
-          "Glob",
-          "Grep",
-          "Agent",
-          "Skill",
-        ],
-        permissionMode: "bypassPermissions",
       },
-    })) {
+      { label: `turn ${tag}` },
+    )) {
       if (msg.type === "assistant") {
         // Reset `reply` on each new assistant turn so only the LAST turn's
         // text becomes the user-facing iMessage. Earlier turns are usually

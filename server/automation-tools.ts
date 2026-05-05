@@ -51,6 +51,13 @@ Integrations available: ${integrationHint}`,
             .optional()
             .default(true)
             .describe("If true, send the result to this conversation when it runs."),
+          notifyOnlyOnChange: z
+            .boolean()
+            .optional()
+            .default(false)
+            .describe(
+              "If true, run as a watcher: only notify when new items appear since the last tick. First run stores a baseline without notifying. Useful for monitoring lists (e.g. new emails, new events).",
+            ),
         },
         async (args) => {
           // Resolve the user's timezone now and store it on the automation,
@@ -82,6 +89,7 @@ Integrations available: ${integrationHint}`,
             conversationId,
             notifyConversationId: args.notify ? conversationId : undefined,
             nextRunAt,
+            notifyOnlyOnChange: args.notifyOnlyOnChange,
           });
           const nextStr = nextRunAt
             ? new Intl.DateTimeFormat("en-US", {
@@ -122,7 +130,7 @@ Integrations available: ${integrationHint}`,
           }
           const lines = mine.map(
             (a) =>
-              `• [${a.automationId}] ${a.enabled ? "●" : "○"} "${a.name}" — ${a.schedule} — ${a.task}`,
+              `• [${a.automationId}] ${a.enabled ? "●" : "○"} "${a.name}" — ${a.schedule} — ${a.task}${a.notifyOnlyOnChange === true ? " (watcher)" : ""}`,
           );
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         },

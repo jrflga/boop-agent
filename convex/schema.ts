@@ -162,6 +162,8 @@ export default defineSchema({
     notifyConversationId: v.optional(v.string()),
     lastRunAt: v.optional(v.number()),
     nextRunAt: v.optional(v.number()),
+    notifyOnlyOnChange: v.optional(v.boolean()),
+    lastSnapshot: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_automation_id", ["automationId"])

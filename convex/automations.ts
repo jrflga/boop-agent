@@ -12,6 +12,7 @@ export const create = mutation({
     conversationId: v.optional(v.string()),
     notifyConversationId: v.optional(v.string()),
     nextRunAt: v.optional(v.number()),
+    notifyOnlyOnChange: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -149,5 +150,21 @@ export const recentRuns = query({
         .take(limit);
     }
     return await ctx.db.query("automationRuns").order("desc").take(limit);
+  },
+});
+
+export const updateSnapshot = mutation({
+  args: {
+    automationId: v.string(),
+    lastSnapshot: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auto = await ctx.db
+      .query("automations")
+      .withIndex("by_automation_id", (q) => q.eq("automationId", args.automationId))
+      .unique();
+    if (!auto) return null;
+    await ctx.db.patch(auto._id, { lastSnapshot: args.lastSnapshot });
+    return auto._id;
   },
 });

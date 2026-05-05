@@ -94,6 +94,14 @@ jobs:
           echo "[2/3] pnpm install --frozen-lockfile (as $APP_USER)"
           sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && CI=true pnpm install --frozen-lockfile"
           echo "[3/3] pm2 restart $PM2_PROCESS"
-          pm2 restart "$PM2_PROCESS" --update-env
-          pm2 save
+          # Override HOME/USER/LOGNAME so pm2 --update-env stamps the
+          # spawned process with the app user's identity instead of
+          # root's. PM2_HOME pins the daemon location so pm2 still
+          # talks to the existing root-owned daemon (where paizao lives).
+          # Without this, the spawned `claude` subprocess from the
+          # @anthropic-ai/claude-agent-sdk reads OAuth credentials from
+          # /root/.claude and exits with code 1.
+          HOME="/home/$APP_USER" USER="$APP_USER" LOGNAME="$APP_USER" PM2_HOME=/root/.pm2 \
+            pm2 restart "$PM2_PROCESS" --update-env
+          PM2_HOME=/root/.pm2 pm2 save
           REMOTE
