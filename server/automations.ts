@@ -4,6 +4,7 @@ import { convex } from "./convex-client.js";
 import { spawnExecutionAgent } from "./execution-agent.js";
 import { sendTelegramMessage } from "./telegram.js";
 import { broadcast } from "./broadcast.js";
+import { getUserTimezone } from "./timezone-config.js";
 
 function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -23,9 +24,13 @@ export function diffAdditions(prev: string[], curr: string[]): string[] {
   return curr.filter((line) => !prevSet.has(line));
 }
 
-export function nextRunFor(schedule: string): number | null {
+// Both helpers accept an optional IANA timezone — when present, croner
+// evaluates the cron expression in that zone. Without it, croner falls back
+// to the server's local zone, which is almost always wrong for users in a
+// different timezone than the host machine.
+export function nextRunFor(schedule: string, timezone?: string): number | null {
   try {
-    const c = new Cron(schedule, { paused: true });
+    const c = new Cron(schedule, { paused: true, ...(timezone ? { timezone } : {}) });
     const next = c.nextRun();
     return next ? next.getTime() : null;
   } catch {
@@ -33,9 +38,12 @@ export function nextRunFor(schedule: string): number | null {
   }
 }
 
-export function validateSchedule(schedule: string): { valid: boolean; error?: string } {
+export function validateSchedule(
+  schedule: string,
+  timezone?: string,
+): { valid: boolean; error?: string } {
   try {
-    new Cron(schedule, { paused: true }).nextRun();
+    new Cron(schedule, { paused: true, ...(timezone ? { timezone } : {}) }).nextRun();
     return { valid: true };
   } catch (err) {
     return { valid: false, error: String(err) };
@@ -48,6 +56,7 @@ async function runAutomation(a: {
   task: string;
   integrations: string[];
   schedule: string;
+  timezone?: string;
   conversationId?: string;
   notifyConversationId?: string;
   notifyOnlyOnChange?: boolean;
@@ -163,7 +172,10 @@ async function runAutomation(a: {
     broadcast("automation_failed", { automationId: a.automationId, runId, error: String(err) });
   }
 
-  const next = nextRunFor(a.schedule);
+  // Pre-TZ automations have no stored timezone — fall back to whatever the
+  // user's current setting is so they don't keep firing in the host zone.
+  const tz = a.timezone ?? (await getUserTimezone());
+  const next = nextRunFor(a.schedule, tz);
   await convex.mutation(api.automations.markRan, {
     automationId: a.automationId,
     lastRunAt: Date.now(),
@@ -182,6 +194,7 @@ export async function tickAutomations(): Promise<void> {
       task: a.task,
       integrations: a.integrations,
       schedule: a.schedule,
+      timezone: a.timezone,
       conversationId: a.conversationId,
       notifyConversationId: a.notifyConversationId,
       notifyOnlyOnChange: a.notifyOnlyOnChange,

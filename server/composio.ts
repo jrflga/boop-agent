@@ -478,7 +478,11 @@ function extractAccountIdentity(state: unknown, data: unknown): AccountIdentity 
 export async function renameConnection(connectionId: string, alias: string): Promise<void> {
   const composio = getComposio();
   if (!composio) throw new Error("COMPOSIO_API_KEY not set");
-  await composio.connectedAccounts.update(connectionId, { alias });
+  // Composio core 0.6.11 narrowed `update()` to `{ enabled: boolean }` and
+  // dropped the typed alias path. The underlying HTTP endpoint still accepts
+  // alias, so we pass it through with a cast until the SDK exposes a typed
+  // alternative (likely `connectedAccounts.patch`).
+  await composio.connectedAccounts.update(connectionId, { alias } as any);
 }
 
 export class ComposioNeedsAuthConfigError extends Error {
@@ -586,4 +590,28 @@ export function buildComposioIntegrationModule(slug: string): IntegrationModule 
       });
     },
   };
+}
+
+// Register (or refresh) a trigger instance for a single connected account.
+// `triggers.create` is described as upsert in Composio docs — calling it again
+// for the same (slug, connected_account_id) pair is a no-op or re-enables a
+// disabled instance. Returns the trigger ID for diagnostics.
+export async function ensureTrigger(
+  triggerSlug: string,
+  connectedAccountId: string,
+): Promise<string | null> {
+  const composio = getComposio();
+  if (!composio) return null;
+  try {
+    const resp = await composio.triggers.create(boopUserId(), triggerSlug, {
+      connectedAccountId,
+    });
+    return resp.triggerId ?? null;
+  } catch (err) {
+    console.warn(
+      `[composio] ensureTrigger failed: ${triggerSlug} for ${connectedAccountId}`,
+      err,
+    );
+    return null;
+  }
 }

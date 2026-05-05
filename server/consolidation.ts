@@ -385,6 +385,15 @@ async function runMemoryMaintenance(
         status: "completed",
         notes: `not enough memories to ${config.mode}`,
       });
+      // Fire the completion broadcast even on the early-return paths so the
+      // debug UI's pipeline timeline closes cleanly. Without this the last
+      // visible phase is "loaded" and the run looks stuck.
+      broadcast("consolidation_completed", {
+        runId,
+        merged: 0,
+        pruned: 0,
+        notes: "not enough memories to consolidate",
+      });
       return { runId, proposals: 0, merged: 0, pruned: 0 };
     }
 
@@ -410,15 +419,51 @@ async function runMemoryMaintenance(
       proposals,
     });
 
+    // Persist details progressively so navigating into a running run shows
+    // partial reasoning (proposals now, challenges/decisions/applied as
+    // those phases finish) instead of an empty section until the very end.
+    // Snapshot the content of every memory referenced by a proposal so the
+    // UI can render `keep: <content preview>` instead of an opaque mem_id.
+    // We only include referenced rows to keep the details JSON small.
+    const referencedIds = new Set<string>();
+    for (const p of proposals) {
+      if (p.keep) referencedIds.add(p.keep);
+      for (const id of p.absorb ?? []) referencedIds.add(id);
+      if (p.newer) referencedIds.add(p.newer);
+      for (const id of p.older ?? []) referencedIds.add(id);
+      if (p.memoryId) referencedIds.add(p.memoryId);
+    }
+    const memorySnapshots: Record<string, { content: string; segment: string; tier: string }> = {};
+    for (const m of memories) {
+      if (referencedIds.has(m.memoryId)) {
+        memorySnapshots[m.memoryId] = {
+          content: m.content,
+          segment: m.segment,
+          tier: m.tier,
+        };
+      }
+    }
+
     await convex.mutation(api.consolidation.updateRun, {
       runId,
       proposalsCount: proposals.length,
+      details: JSON.stringify({
+        memoriesScanned: memories.length,
+        proposals,
+        memorySnapshots,
+      }),
     });
 
     if (proposals.length === 0) {
       await convex.mutation(api.consolidation.updateRun, {
         runId,
         status: "completed",
+        notes: "no proposals",
+      });
+      broadcast("consolidation_completed", {
+        runId,
+        merged: 0,
+        pruned: 0,
         notes: "no proposals",
       });
       return { runId, proposals: 0, merged: 0, pruned: 0 };
@@ -453,6 +498,15 @@ async function runMemoryMaintenance(
       challengesCount: challenges.length,
       challenges,
     });
+    await convex.mutation(api.consolidation.updateRun, {
+      runId,
+      details: JSON.stringify({
+        memoriesScanned: memories.length,
+        proposals,
+        challenges,
+        memorySnapshots,
+      }),
+    });
 
     const challengesByIndex = new Map(challenges.map((c) => [c.proposalIndex, c]));
     const challengesBlock = proposals
@@ -486,6 +540,16 @@ async function runMemoryMaintenance(
       approvedCount: approved.size,
       rejectedCount: decisions.length - approved.size,
       decisions,
+    });
+    await convex.mutation(api.consolidation.updateRun, {
+      runId,
+      details: JSON.stringify({
+        memoriesScanned: memories.length,
+        proposals,
+        challenges,
+        decisions,
+        memorySnapshots,
+      }),
     });
 
     const applied: Applied[] = [];
@@ -559,6 +623,7 @@ async function runMemoryMaintenance(
         challenges,
         decisions,
         applied,
+        memorySnapshots,
       }),
     });
     await convex.mutation(api.memoryEvents.emit, {

@@ -1,4 +1,6 @@
 import "./env-setup.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
@@ -14,6 +16,9 @@ import { startConsolidationLoop } from "./consolidation.js";
 import { cancelAgent, retryAgent } from "./execution-agent.js";
 import { createComposioRouter } from "./composio-routes.js";
 import { adminTokenFromUpgrade, isAdminTokenValid, requireAdminToken } from "./http-auth.js";
+import { ensureProactiveWatcher } from "./proactive-email.js";
+import { preloadLocalModel } from "./embeddings.js";
+import { createMemoryRouter } from "./memory-routes.js";
 
 async function main() {
   await loadIntegrations();
@@ -21,9 +26,37 @@ async function main() {
   startAutomationLoop();
   startHeartbeatLoop();
   startConsolidationLoop();
+  // No-op when a paid embedding key is set; otherwise downloads/loads the
+  // local BGE-large model in the background so the first user-facing
+  // recall() doesn't pay the model-load cost.
+  preloadLocalModel();
+
+  // If a stable public URL is configured, register the Composio webhook +
+  // Gmail trigger now. For ngrok-based dev, scripts/dev.mjs drives the same
+  // function once the ngrok URL is known, so we skip when only the local
+  // PORT default is available.
+  // Proactive Gmail watcher disabled in this fork: the dispatch path in
+  // proactive-email.ts still calls into Sendblue/iMessage, which we removed
+  // when migrating to Telegram. Re-enable after porting that dispatch to
+  // sendTelegramMessage.
+  void ensureProactiveWatcher;
+  // const stableUrl = process.env.PUBLIC_URL;
+  // if (stableUrl && !stableUrl.includes("localhost")) {
+  //   ensureProactiveWatcher(stableUrl).catch((err) =>
+  //     console.error("[proactive] startup failed", err),
+  //   );
+  // }
 
   const app = express();
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const dashboardDir = path.resolve(__dirname, "..", "debug", "dist");
+
   app.use(cors());
+  // Composio webhook receiver must read raw bytes for HMAC verification, so
+  // its body parser is mounted BEFORE the global express.json. Without this
+  // ordering the JSON parser consumes the stream first and the raw buffer
+  // arrives empty.
+  app.use("/composio/webhook", express.raw({ type: "application/json", limit: "2mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/health", (_req, res) => {
@@ -31,15 +64,33 @@ async function main() {
   });
 
   app.use("/telegram", createTelegramRouter());
-  app.use(requireAdminToken);
-  app.use("/composio", createComposioRouter());
 
-  app.post("/agents/:id/cancel", (req, res) => {
+  // Dashboard (debug React app). Static assets are public; the API
+  // behind /api/* and the WebSocket are gated. The bundle has no
+  // secrets in it (only VITE_CONVEX_URL, public-by-design).
+  app.use(express.static(dashboardDir, { index: false, fallthrough: true }));
+  app.get(/^\/(?!api\/|auth\/|telegram\/|health$|ws$|login$).*/, (req, res, next) => {
+    if (!req.accepts("text/html")) {
+      next();
+      return;
+    }
+    const indexPath = path.join(dashboardDir, "index.html");
+    res.sendFile(indexPath, (err) => {
+      if (err) next(err);
+    });
+  });
+
+  const apiRouter = express.Router();
+  apiRouter.use(requireAdminToken);
+  apiRouter.use("/composio", createComposioRouter());
+  apiRouter.use("/memory", createMemoryRouter());
+
+  apiRouter.post("/agents/:id/cancel", (req, res) => {
     const ok = cancelAgent(req.params.id);
     res.json({ ok });
   });
 
-  app.post("/consolidate", async (_req, res) => {
+  apiRouter.post("/consolidate", async (_req, res) => {
     try {
       const { runConsolidation } = await import("./consolidation.js");
       // Fire-and-forget so the HTTP request returns immediately.
@@ -52,7 +103,7 @@ async function main() {
     }
   });
 
-  app.post("/compact", async (_req, res) => {
+  apiRouter.post("/compact", async (_req, res) => {
     try {
       const { runCompaction } = await import("./consolidation.js");
       // Fire-and-forget so the HTTP request returns immediately.
@@ -65,7 +116,7 @@ async function main() {
     }
   });
 
-  app.post("/agents/:id/retry", async (req, res) => {
+  apiRouter.post("/agents/:id/retry", async (req, res) => {
     const result = await retryAgent(req.params.id);
     if (!result) {
       res.status(404).json({ error: "agent not found" });
@@ -75,7 +126,7 @@ async function main() {
   });
 
   // Chat endpoint for local testing and the debug dashboard
-  app.post("/chat", async (req, res) => {
+  apiRouter.post("/chat", async (req, res) => {
     const { conversationId, content } = req.body ?? {};
     if (!conversationId || !content) {
       res.status(400).json({ error: "conversationId and content required" });
@@ -89,6 +140,8 @@ async function main() {
       res.status(500).json({ error: String(err) });
     }
   });
+
+  app.use("/api", apiRouter);
 
   const server = createServer(app);
   const wss = new WebSocketServer({
@@ -106,7 +159,7 @@ async function main() {
   server.listen(port, () => {
     console.log(`boop-agent server listening on :${port}`);
     console.log(`  health      GET  http://localhost:${port}/health`);
-    console.log(`  chat        POST http://localhost:${port}/chat`);
+    console.log(`  chat        POST http://localhost:${port}/api/chat`);
     console.log(`  telegram    POST http://localhost:${port}/telegram/webhook`);
     console.log(`  websocket   WS   ws://localhost:${port}/ws`);
   });

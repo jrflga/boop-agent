@@ -359,6 +359,7 @@ Everything lives in `.env.local` (auto-created by `npm run setup`). See `.env.ex
 | `TELEGRAM_ALLOWED_CHAT_IDS` | yes | Comma-separated Telegram chat/user IDs allowed to use this personal agent. |
 | `ADMIN_TOKEN` | yes | Shared token required by dashboard/API routes and `/ws`. |
 | `BOOP_MODEL` | no | Default `claude-sonnet-4-6`. |
+| `BOOP_USER_TIME_ZONE` | no | IANA timezone for task due dates and "today" filtering. Default: `America/Sao_Paulo`. |
 | `BOOP_UPSTREAM_CHECK` | no | Set to `false` to disable the new-version banner on `npm run dev`. Default: on. |
 | `PORT` | no | Default `3456`. |
 | `PUBLIC_URL` | no | Base URL used in the Telegram webhook. Composio handles its own OAuth callbacks on `platform.composio.dev`, so this is just for inbound Telegram. |
