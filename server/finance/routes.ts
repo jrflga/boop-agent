@@ -2,11 +2,24 @@ import express from "express";
 import { z } from "zod";
 import { getFinanceDb } from "./db.js";
 import { getPluggyClient } from "./pluggy.js";
+import { createPluggyConnectToken, resolvePluggyWebhookUrl } from "./pluggy.js";
 import { logFinanceAudit } from "./audit.js";
+import {
+  deletePluggyItem,
+  listRegisteredPluggyItems,
+  pluggyItemToRecord,
+  upsertPluggyItem,
+} from "./store.js";
 
 const RegisterItemBody = z.object({
   itemId: z.string().min(1),
   alias: z.string().min(1).max(120),
+});
+
+const ConnectTokenBody = z.object({
+  itemId: z.string().min(1).optional(),
+  clientUserId: z.string().min(1).optional(),
+  webhookUrl: z.string().url().optional(),
 });
 
 export function createFinanceRouter(): express.Router {
@@ -14,13 +27,7 @@ export function createFinanceRouter(): express.Router {
 
   router.get("/items", (_req, res) => {
     try {
-      const db = getFinanceDb();
-      const rows = db
-        .prepare(
-          "SELECT item_id, alias, connector_id, status, last_sync_at, created_at FROM pluggy_items ORDER BY created_at DESC",
-        )
-        .all();
-      res.json({ items: rows });
+      res.json({ items: listRegisteredPluggyItems() });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -39,6 +46,30 @@ export function createFinanceRouter(): express.Router {
       res.json({ entries: rows });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  router.get("/config", (_req, res) => {
+    res.json({ webhookUrl: resolvePluggyWebhookUrl() });
+  });
+
+  router.post("/connect-token", async (req, res) => {
+    const parsed = ConnectTokenBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+    try {
+      const resolvedWebhookUrl = parsed.data.webhookUrl ?? resolvePluggyWebhookUrl() ?? undefined;
+      const token = await createPluggyConnectToken({
+        itemId: parsed.data.itemId,
+        clientUserId: parsed.data.clientUserId,
+        webhookUrl: resolvedWebhookUrl,
+      });
+      res.json({ accessToken: token.accessToken, webhookUrl: resolvedWebhookUrl ?? null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: message });
     }
   });
 
@@ -61,34 +92,18 @@ export function createFinanceRouter(): express.Router {
 
     try {
       const item = await client.fetchItem(itemId);
-      const connectorId = item.connector?.id ?? null;
-      const db = getFinanceDb();
-      db.prepare(
-        `INSERT INTO pluggy_items (item_id, alias, connector_id, status, last_sync_at)
-         VALUES (?, ?, ?, 'active', ?)
-         ON CONFLICT(item_id) DO UPDATE SET
-           alias = excluded.alias,
-           connector_id = excluded.connector_id,
-           status = excluded.status,
-           last_sync_at = excluded.last_sync_at`,
-      ).run(
-        itemId,
-        alias,
-        connectorId,
-        item.lastUpdatedAt instanceof Date
-          ? item.lastUpdatedAt.toISOString()
-          : (item.lastUpdatedAt ?? null),
-      );
+      const record = pluggyItemToRecord(item, alias);
+      upsertPluggyItem(record);
 
       logFinanceAudit({
         source: "tool_call",
         action: "register_item",
         payload: { itemId, alias },
-        result: { connectorId, status: "active" },
+        result: { connectorId: record.connectorId, status: record.status },
         durationMs: Date.now() - started,
       });
 
-      res.json({ ok: true, itemId, alias, connectorId, status: "active" });
+      res.json({ ok: true, itemId, alias, connectorId: record.connectorId, status: record.status });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logFinanceAudit({
@@ -110,9 +125,7 @@ export function createFinanceRouter(): express.Router {
       return;
     }
     try {
-      const db = getFinanceDb();
-      const result = db.prepare("DELETE FROM pluggy_items WHERE item_id = ?").run(itemId);
-      const removed = Number(result.changes) > 0;
+      const removed = deletePluggyItem(itemId);
       logFinanceAudit({
         source: "tool_call",
         action: "remove_item",

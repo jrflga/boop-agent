@@ -157,8 +157,8 @@ export interface ActiveItem {
 export function listActiveItems(alias?: string): ActiveItem[] {
   const db = getFinanceDb();
   const sql = alias
-    ? "SELECT item_id, alias, connector_id FROM pluggy_items WHERE status = 'active' AND alias = ?"
-    : "SELECT item_id, alias, connector_id FROM pluggy_items WHERE status = 'active'";
+    ? "SELECT item_id, alias, connector_id FROM pluggy_items WHERE alias = ?"
+    : "SELECT item_id, alias, connector_id FROM pluggy_items";
   const rows = (alias ? db.prepare(sql).all(alias) : db.prepare(sql).all()) as unknown as Array<{
     item_id: string;
     alias: string;

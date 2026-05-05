@@ -20,6 +20,8 @@ import { ensureProactiveWatcher } from "./proactive-email.js";
 import { preloadLocalModel } from "./embeddings.js";
 import { createMemoryRouter } from "./memory-routes.js";
 import { createFinanceRouter } from "./finance/routes.js";
+import { createPluggyWebhookRouter } from "./finance/webhook.js";
+import { ensurePluggyWebhook } from "./finance/pluggy.js";
 import { getFinanceDb } from "./finance/db.js";
 
 async function main() {
@@ -27,6 +29,21 @@ async function main() {
   // request doesn't pay the migrate cost and a missing/unwritable data dir
   // surfaces immediately instead of inside a tool call.
   getFinanceDb();
+  // Best-effort registration of the Pluggy webhook so item/updated events
+  // start landing without a manual dashboard visit. Skipped silently when
+  // Pluggy isn't configured or PUBLIC_URL is local; logged but non-fatal
+  // when the Pluggy API is unreachable.
+  ensurePluggyWebhook()
+    .then((result) => {
+      if (result.status === "skipped") {
+        console.log(`[pluggy.webhook] skipped: ${result.reason}`);
+      } else if (result.status === "error") {
+        console.error(`[pluggy.webhook] register failed: ${result.error}`);
+      } else {
+        console.log(`[pluggy.webhook] ${result.status} ${result.id} -> ${result.url}`);
+      }
+    })
+    .catch((err) => console.error("[pluggy.webhook] unexpected", err));
   await loadIntegrations();
   startCleanupLoop();
   startAutomationLoop();
@@ -70,6 +87,7 @@ async function main() {
   });
 
   app.use("/telegram", createTelegramRouter());
+  app.use("/webhooks/pluggy", createPluggyWebhookRouter());
 
   // Dashboard (debug React app). Static assets are public; the API
   // behind /api/* and the WebSocket are gated. The bundle has no

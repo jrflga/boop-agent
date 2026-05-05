@@ -1,7 +1,7 @@
 import { getFinanceDb } from "./db.js";
 
 interface AuditEntry {
-  source: "tool_call" | "watcher" | "system";
+  source: "tool_call" | "watcher" | "system" | "webhook";
   action: string;
   payload?: unknown;
   result?: unknown;
