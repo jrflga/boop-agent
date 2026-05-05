@@ -1,0 +1,61 @@
+name: Changelog notify
+
+# Posts a plain-text summary to the Telegram chat every time a PR
+# merges into main. Direct sendMessage via Bot API: no agent in the
+# loop, no boop-agent restart required, no Convex write — just a
+# notification mirroring the deploy pipeline.
+#
+# Required repo secrets:
+#   TELEGRAM_BOT_TOKEN  same value as the runtime env on the VPS
+#   TELEGRAM_CHAT_ID    target chat (single-user fork: the maintainer's chat)
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  notify:
+    name: Send merge to Telegram
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Post to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -eu
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID}" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set; skipping."
+            exit 0
+          fi
+
+          BODY="${PR_BODY:-(sem descrição)}"
+          # Telegram caps a single message at 4096 chars; keep headroom for
+          # the title + URL + author and the empty lines between them.
+          if [ "${#BODY}" -gt 1500 ]; then
+            BODY="${BODY:0:1500}
+
+... (truncado, ver PR completo)"
+          fi
+
+          MESSAGE="PR #${PR_NUMBER} merged
+
+${PR_TITLE}
+
+${BODY}
+
+${PR_URL}"
+
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            -o /dev/null
+          echo "Notified PR #${PR_NUMBER} merge to chat ${TELEGRAM_CHAT_ID}."
