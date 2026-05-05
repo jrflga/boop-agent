@@ -65,15 +65,36 @@ export function createPluggyWebhookRouter(): express.Router {
       }
     }
 
+    // Be liberal with the body: the Pluggy dashboard does a connectivity
+    // probe (often empty body) when saving a webhook URL, and a 4xx makes
+    // it report "Failed to register webhook." Same for events we don't
+    // know yet — we'd rather ack and audit than 4xx and force a retry.
     const parsed = WebhookBody.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.message });
+      logFinanceAudit({
+        source: "webhook",
+        action: "probe_or_invalid",
+        payload: req.body ?? null,
+        result: { error: parsed.error.message },
+        durationMs: Date.now() - started,
+      });
+      res.json({ ok: true, ignored: "unrecognized payload" });
       return;
     }
 
     const { event, eventId, clientUserId, itemId } = parsed.data;
     if (!itemId && event !== "connector/status_updated") {
-      res.status(400).json({ error: "itemId is required for this webhook event" });
+      // Same rationale: ack with audit so Pluggy doesn't keep retrying
+      // legitimate-but-unhandled events. We log enough to debug if
+      // something material is being silently dropped.
+      logFinanceAudit({
+        source: "webhook",
+        action: event,
+        payload: { event, eventId, clientUserId, itemId },
+        result: { ignored: "missing itemId" },
+        durationMs: Date.now() - started,
+      });
+      res.json({ ok: true, ignored: "missing itemId" });
       return;
     }
 
