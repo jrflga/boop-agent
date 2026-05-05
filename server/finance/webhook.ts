@@ -48,6 +48,15 @@ async function syncItem(itemId: string, event: string, aliasFallback?: string | 
 export function createPluggyWebhookRouter(): express.Router {
   const router = express.Router();
 
+  // Some webhook providers (and reverse proxies / uptime checks) probe a
+  // URL with GET before accepting it. Without an explicit handler, the
+  // request falls through to the SPA fallback in server/index.ts, which
+  // ENOENTs on a fresh deploy and surfaces as a 404 HTML page — exactly
+  // the shape that makes a Pluggy "Save & Test Webhook" probe fail.
+  router.get("/", (_req, res) => {
+    res.json({ received: true, ok: true });
+  });
+
   router.post("/", async (req, res) => {
     const started = Date.now();
 
@@ -78,7 +87,7 @@ export function createPluggyWebhookRouter(): express.Router {
         result: { error: parsed.error.message },
         durationMs: Date.now() - started,
       });
-      res.json({ ok: true, ignored: "unrecognized payload" });
+      res.json({ received: true, ok: true, ignored: "unrecognized payload" });
       return;
     }
 
@@ -94,7 +103,7 @@ export function createPluggyWebhookRouter(): express.Router {
         result: { ignored: "missing itemId" },
         durationMs: Date.now() - started,
       });
-      res.json({ ok: true, ignored: "missing itemId" });
+      res.json({ received: true, ok: true, ignored: "missing itemId" });
       return;
     }
 
@@ -117,7 +126,7 @@ export function createPluggyWebhookRouter(): express.Router {
         durationMs: Date.now() - started,
       });
 
-      res.json({ ok: true });
+      res.json({ received: true, ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logFinanceAudit({
@@ -127,7 +136,7 @@ export function createPluggyWebhookRouter(): express.Router {
         result: { error: message },
         durationMs: Date.now() - started,
       });
-      res.status(200).json({ ok: false, error: message });
+      res.status(200).json({ received: true, ok: false, error: message });
     }
   });
 
