@@ -12,11 +12,11 @@
     "preflight": "node scripts/preflight.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:parallel": "npm-run-all --parallel dev:server dev:convex dev:debug",
-    "dev:server": "npm run preflight && tsx watch server/index.ts",
+    "dev:server": "npm run preflight && NODE_OPTIONS=--experimental-sqlite tsx watch server/index.ts",
     "dev:convex": "convex dev",
     "dev:debug": "vite --config debug/vite.config.ts",
     "build:debug": "vite build --config debug/vite.config.ts",
-    "start": "npm run preflight && tsx server/index.ts",
+    "start": "npm run preflight && NODE_OPTIONS=--experimental-sqlite tsx server/index.ts",
     "deploy:convex": "convex deploy",
     "typecheck": "tsc --noEmit"
   },
