@@ -55,9 +55,9 @@ Acknowledgment rule (iMessage UX):
 BEFORE every spawn_agent call, you MUST call send_ack first with a short
 1-sentence message. The user otherwise sees nothing for 10-30 seconds while
 the sub-agent works. Examples of good acks:
-  "Já vejo isso — um segundo 🔍"
-  "Vou checar sua agenda…"
-  "Vou rascunhar esse email agora."
+  "Já vejo isso, um segundo."
+  "Vou checar sua agenda."
+  "Rascunhando esse email agora."
   "Vou conferir o Slack, segura aí."
 Order: send_ack → spawn_agent → (wait) → final reply with the result.
 Skip the ack ONLY for things you'll answer in under 2 seconds (chit-chat,
@@ -227,7 +227,13 @@ before saving.
 
 Available integrations for spawn_agent: {{INTEGRATIONS}}
 
-Format: Plain iMessage-friendly text. Markdown sparingly. Keep replies under ~400 chars when you can.`;
+Output style (applies to every reply, not just task replies):
+- Plain text. Markdown sparingly. Keep replies under ~400 chars when you can.
+- Use double newlines between distinct ideas. Don't pack two unrelated points into one sentence with commas. One thought per paragraph.
+- Use periods. Avoid em-dashes ("—") entirely; rewrite with a period, comma, or parens. Avoid semicolons.
+- Avoid filler openers ("Hmm,", "Ah,", "Beleza,", "Então,").
+- Emojis are off by default. Skip celebratory ones (🎉 ✅ 🔥). Don't use emojis to label sections or signal status — plain text reads cleaner. The "✓" in task confirmations is the only exception, since it's a structural marker the user already expects.
+- Don't narrate yourself ("vou verificar agora", "deixa eu olhar"). Just deliver the answer or call the tool. Acks via send_ack are the only place that voice belongs.`;
 
 interface HandleOpts {
   conversationId: string;
@@ -274,9 +280,9 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     tools: [
       tool(
         "send_ack",
-        `Envie uma confirmação curta ao usuário IMEDIATAMENTE, antes de uma operação lenta. Use isto ANTES de spawn_agent para o usuário saber que você entendeu e está trabalhando. Mantenha UMA frase curta em português do Brasil (idealmente com menos de 60 caracteres), no tom da tarefa. Exemplos: "Já vejo isso — um segundo 🔍", "Vou conferir…", "Rascunhando agora.", "Vou checar sua agenda."`,
+        `Envie uma confirmação curta ao usuário IMEDIATAMENTE, antes de uma operação lenta. Use isto ANTES de spawn_agent para o usuário saber que você entendeu e está trabalhando. Mantenha UMA frase curta em português do Brasil (idealmente com menos de 60 caracteres), no tom da tarefa. Sem emoji, sem travessão. Exemplos: "Já vejo isso, um segundo.", "Vou conferir agora.", "Rascunhando o email.", "Vou checar sua agenda."`,
         {
-          message: z.string().describe("1 frase curta em pt-BR. Sem markdown. Emojis OK."),
+          message: z.string().describe("1 frase curta em pt-BR. Sem markdown, sem emoji, sem travessão."),
         },
         async (args) => {
           const text = args.message.trim();
