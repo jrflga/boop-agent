@@ -89,10 +89,16 @@ jobs:
           echo "[1/3] git fetch + reset to origin/main (as $APP_USER)"
           sudo -u "$APP_USER" git fetch --prune origin
           sudo -u "$APP_USER" git reset --hard origin/main
-          echo "[2/3] pnpm install --frozen-lockfile (as $APP_USER)"
+          echo "[2/4] pnpm install --frozen-lockfile (as $APP_USER)"
           corepack enable
           sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && CI=true corepack pnpm install --frozen-lockfile"
-          echo "[3/3] pm2 restart $PM2_PROCESS"
+          # debug/dist/ is gitignored; the server's SPA fallback in
+          # server/index.ts sendFile()s debug/dist/index.html on every
+          # HTML GET, so a deploy without this step ENOENTs the dashboard
+          # (and any new debug UI from this push, e.g. PluggySection).
+          echo "[3/4] pnpm build:debug (as $APP_USER)"
+          sudo -u "$APP_USER" -H bash -c "cd '$INSTALL_DIR' && CI=true corepack pnpm build:debug"
+          echo "[4/4] pm2 restart $PM2_PROCESS"
           # Override HOME/USER/LOGNAME so pm2 --update-env stamps the
           # spawned process with the app user's identity instead of
           # root's. PM2_HOME pins the daemon location so pm2 still
